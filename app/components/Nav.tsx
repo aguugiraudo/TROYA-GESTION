@@ -14,6 +14,7 @@ const allTabs = [
   { href: '/historial', label: 'Historial de Órdenes', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
   { href: '/rendimiento', label: 'Rendimiento de Operarios', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
   { href: '/base-datos', label: 'Catálogo de Productos', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
+  { href: '/insumos', label: 'Insumos', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
   { href: '/dashboard', label: 'Dashboard', roles: ['perfil_1', 'perfil_3'] },
 ]
 
@@ -32,7 +33,6 @@ export default function Nav() {
         <Link href="/" className="shrink-0 flex items-center">
           <Image src="/logo_troya_white.png" alt="Troya" width={120} height={42} className="h-8 w-auto" priority />
         </Link>
-
         <div className="hidden md:flex items-center gap-4 overflow-x-auto">
           {tabs.map((t) => {
             const active = pathname === t.href
@@ -51,7 +51,6 @@ export default function Nav() {
             )
           })}
         </div>
-
         <div className="flex items-center gap-3">
           {/* Menú de usuario compacto (desktop y celular) */}
           <div className="relative">
@@ -76,7 +75,6 @@ export default function Nav() {
               </>
             )}
           </div>
-
           <button
             onClick={() => setOpen(!open)}
             className="md:hidden text-slate-300 p-2"
@@ -86,7 +84,6 @@ export default function Nav() {
           </button>
         </div>
       </div>
-
       {open && (
         <div className="md:hidden bg-slate-800 border-t border-slate-700 px-4 py-2">
           {tabs.map((t) => {
