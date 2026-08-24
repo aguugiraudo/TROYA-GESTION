@@ -42,8 +42,11 @@ export default function CatalogoProductosPage() {
   const [laserModalOpen, setLaserModalOpen] = useState(false)
   const [laserModalLoteId, setLaserModalLoteId] = useState<string | null>(null)
   const [laserModalQty, setLaserModalQty] = useState<number>(0)
-  const [laserEspesores, setLaserEspesores] = useState<{ id: string | null; espesor_mm: string; nidos: { id: string | null; minutos: string }[] }[]>([])
+  const [laserEspesores, setLaserEspesores] = useState<{ id: string | null; espesor_mm: string; nidos: { id: string | null; minutos: string; cargaDescarga: string }[] }[]>([])
   const [laserLoading, setLaserLoading] = useState(false)
+
+  // Aviso de descuadre entre el tiempo unitario que da el desglose y el tiempo cargado en el Catálogo
+  const [laserMismatch, setLaserMismatch] = useState<{ computed: number; catalogValue: number | null; catalogRowId: string | null; catalogSectorId: string } | null>(null)
 
   const [loading, setLoading] = useState(true)
 
@@ -99,6 +102,17 @@ export default function CatalogoProductosPage() {
     setLaserLotes(data || [])
   }
 
+  // Ubica el sector "Corte Láser" (por nombre) y el catalog_time de tipo producto para el producto actual en ese sector
+  function findLaserSector() {
+    return sectors.find((s) => s.name.toLowerCase().includes('láser') || s.name.toLowerCase().includes('laser'))
+  }
+  function findLaserCatalogRow() {
+    const laserSector = findLaserSector()
+    if (!laserSector) return { sector: null, row: null }
+    const row = productTimes.find((t) => t.sector_id === laserSector.id)
+    return { sector: laserSector, row }
+  }
+
   function openNewLaserLote() {
     const input = prompt('Cantidad del lote (ej: 8)')
     if (!input) return
@@ -110,7 +124,7 @@ export default function CatalogoProductosPage() {
 
     setLaserModalLoteId(null)
     setLaserModalQty(qty)
-    setLaserEspesores([{ id: null, espesor_mm: '', nidos: [{ id: null, minutos: '' }] }])
+    setLaserEspesores([{ id: null, espesor_mm: '', nidos: [{ id: null, minutos: '', cargaDescarga: '' }] }])
     setLaserModalOpen(true)
   }
 
@@ -129,15 +143,15 @@ export default function CatalogoProductosPage() {
       loaded.push({
         id: esp.id,
         espesor_mm: String(esp.espesor_mm),
-        nidos: (nidos || []).map((n: any) => ({ id: n.id, minutos: String(n.standard_time_minutes) })),
+        nidos: (nidos || []).map((n: any) => ({ id: n.id, minutos: String(n.standard_time_minutes), cargaDescarga: String(n.carga_descarga_minutes ?? 0) })),
       })
     }
-    setLaserEspesores(loaded.length > 0 ? loaded : [{ id: null, espesor_mm: '', nidos: [{ id: null, minutos: '' }] }])
+    setLaserEspesores(loaded.length > 0 ? loaded : [{ id: null, espesor_mm: '', nidos: [{ id: null, minutos: '', cargaDescarga: '' }] }])
     setLaserLoading(false)
   }
 
   function addEspesorRow() {
-    setLaserEspesores((prev) => [...prev, { id: null, espesor_mm: '', nidos: [{ id: null, minutos: '' }] }])
+    setLaserEspesores((prev) => [...prev, { id: null, espesor_mm: '', nidos: [{ id: null, minutos: '', cargaDescarga: '' }] }])
   }
 
   function removeEspesorRow(index: number) {
@@ -150,7 +164,7 @@ export default function CatalogoProductosPage() {
 
   function addNidoRow(espesorIndex: number) {
     setLaserEspesores((prev) => prev.map((e, i) =>
-      i === espesorIndex ? { ...e, nidos: [...e.nidos, { id: null, minutos: '' }] } : e
+      i === espesorIndex ? { ...e, nidos: [...e.nidos, { id: null, minutos: '', cargaDescarga: '' }] } : e
     ))
   }
 
@@ -164,6 +178,25 @@ export default function CatalogoProductosPage() {
     setLaserEspesores((prev) => prev.map((e, i) =>
       i === espesorIndex ? { ...e, nidos: e.nidos.map((n, ni) => (ni === nidoIndex ? { ...n, minutos: value } : n)) } : e
     ))
+  }
+
+  function updateNidoCargaDescarga(espesorIndex: number, nidoIndex: number, value: string) {
+    setLaserEspesores((prev) => prev.map((e, i) =>
+      i === espesorIndex ? { ...e, nidos: e.nidos.map((n, ni) => (ni === nidoIndex ? { ...n, cargaDescarga: value } : n)) } : e
+    ))
+  }
+
+  // Suma minutos de corte + carga/descarga de TODOS los nidos cargados, / cantidad del lote = tiempo unitario de Láser
+  function computeUnitTime() {
+    let totalMin = 0
+    laserEspesores.forEach((esp) => {
+      esp.nidos.forEach((n) => {
+        if (!n.minutos) return
+        totalMin += parseFloat(n.minutos) + parseFloat(n.cargaDescarga || '0')
+      })
+    })
+    if (laserModalQty <= 0) return 0
+    return Math.round((totalMin / laserModalQty) * 100) / 100
   }
 
   async function saveLaserLote() {
@@ -190,15 +223,51 @@ export default function CatalogoProductosPage() {
 
       const nidosToInsert = esp.nidos
         .filter((n) => n.minutos)
-        .map((n, i) => ({ laser_espesor_id: espData.id, numero: i + 1, standard_time_minutes: parseFloat(n.minutos) }))
+        .map((n, i) => ({
+          laser_espesor_id: espData.id, numero: i + 1,
+          standard_time_minutes: parseFloat(n.minutos),
+          carga_descarga_minutes: parseFloat(n.cargaDescarga || '0'),
+        }))
       if (nidosToInsert.length > 0) {
         await supabase.from('laser_nidos').insert(nidosToInsert)
       }
     }
 
     setLaserLoading(false)
-    setLaserModalOpen(false)
     fetchLaserLotes(selectedProduct.id)
+
+    // Validar contra el Catálogo
+    const computed = computeUnitTime()
+    const { sector, row } = findLaserCatalogRow()
+    if (sector) {
+      const catalogValue = row ? Number(row.standard_time_minutes) : null
+      if (catalogValue == null || Math.abs(catalogValue - computed) > 0.05) {
+        setLaserMismatch({ computed, catalogValue, catalogRowId: row?.id ?? null, catalogSectorId: sector.id })
+        return // no cierra el modal todavía — primero se resuelve el aviso
+      }
+    }
+
+    setLaserModalOpen(false)
+  }
+
+  async function resolveLaserMismatchUpdateCatalog() {
+    if (!laserMismatch || !selectedProduct) return
+    if (laserMismatch.catalogRowId) {
+      await supabase.from('catalog_times').update({ standard_time_minutes: laserMismatch.computed }).eq('id', laserMismatch.catalogRowId)
+    } else {
+      await supabase.from('catalog_times').insert({
+        sector_id: laserMismatch.catalogSectorId, target_type: 'product', product_id: selectedProduct.id,
+        standard_time_minutes: laserMismatch.computed,
+      })
+    }
+    setLaserMismatch(null)
+    setLaserModalOpen(false)
+    fetchProductDetail(selectedProduct.id)
+  }
+
+  function resolveLaserMismatchKeepEditing() {
+    setLaserMismatch(null)
+    // el modal del desglose queda abierto para que sigan ajustando los nidos
   }
 
   async function deleteLaserLote() {
@@ -717,66 +786,91 @@ export default function CatalogoProductosPage() {
             {laserLoading ? (
               <p className="text-sm text-slate-400">Cargando...</p>
             ) : (
-              <div className="space-y-4">
-                {laserEspesores.map((esp, espIndex) => (
-                  <div key={espIndex} className="border border-slate-200 rounded-lg p-3">
-                    <div className="flex items-center gap-2 mb-3">
-                      <label className="text-xs text-slate-500 shrink-0">Espesor</label>
-                      <input
-                        type="number" step={0.1} placeholder="Ej: 3.2"
-                        value={esp.espesor_mm}
-                        onChange={(e) => updateEspesorMm(espIndex, e.target.value)}
-                        disabled={!canEdit}
-                        className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-24 disabled:bg-slate-50 disabled:text-slate-400"
-                      />
-                      <span className="text-xs text-slate-400">mm</span>
+              <>
+                <div className="bg-slate-50 rounded-lg p-3 mb-4">
+                  <p className="text-xs text-slate-500">
+                    Tiempo unitario resultante: <strong className="text-slate-700">{computeUnitTime()} min/u.</strong>
+                    {' '}(suma de Corte + Carga/descarga de todos los nidos, dividido {laserModalQty})
+                  </p>
+                </div>
+
+                <div className="space-y-4">
+                  {laserEspesores.map((esp, espIndex) => (
+                    <div key={espIndex} className="border border-slate-200 rounded-lg p-3">
+                      <div className="flex items-center gap-2 mb-3">
+                        <label className="text-xs text-slate-500 shrink-0">Espesor</label>
+                        <input
+                          type="number" step={0.1} placeholder="Ej: 3.2"
+                          value={esp.espesor_mm}
+                          onChange={(e) => updateEspesorMm(espIndex, e.target.value)}
+                          disabled={!canEdit}
+                          className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-24 disabled:bg-slate-50 disabled:text-slate-400"
+                        />
+                        <span className="text-xs text-slate-400">mm</span>
+                        {canEdit && (
+                          <button onClick={() => removeEspesorRow(espIndex)} className="ml-auto text-xs text-rose-500 hover:underline">
+                            Quitar espesor
+                          </button>
+                        )}
+                      </div>
+
+                      <p className="text-xs text-slate-500 mb-2">Nidos (una chapa por nido — cada uno con su tiempo de corte y de carga/descarga)</p>
+                      <div className="space-y-2">
+                        {esp.nidos.map((nido, nidoIndex) => {
+                          const nidoTotal = (parseFloat(nido.minutos || '0') + parseFloat(nido.cargaDescarga || '0'))
+                          return (
+                            <div key={nidoIndex} className="flex items-center gap-2 flex-wrap">
+                              <span className="text-xs text-slate-400 w-14 shrink-0">Nido {nidoIndex + 1}</span>
+                              <div className="flex items-center gap-1">
+                                <input
+                                  type="number" placeholder="Corte"
+                                  value={nido.minutos}
+                                  onChange={(e) => updateNidoMinutos(espIndex, nidoIndex, e.target.value)}
+                                  disabled={!canEdit}
+                                  className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-20 disabled:bg-slate-50 disabled:text-slate-400"
+                                />
+                                <span className="text-[10px] text-slate-400">corte</span>
+                              </div>
+                              <span className="text-slate-300">+</span>
+                              <div className="flex items-center gap-1">
+                                <input
+                                  type="number" placeholder="Carga"
+                                  value={nido.cargaDescarga}
+                                  onChange={(e) => updateNidoCargaDescarga(espIndex, nidoIndex, e.target.value)}
+                                  disabled={!canEdit}
+                                  className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-20 disabled:bg-slate-50 disabled:text-slate-400"
+                                />
+                                <span className="text-[10px] text-slate-400">carga/desc.</span>
+                              </div>
+                              {(nido.minutos || nido.cargaDescarga) && (
+                                <span className="text-xs text-slate-500 italic">
+                                  → "Nido {nidoIndex + 1} ({Math.round(nidoTotal * 10) / 10} min)"
+                                </span>
+                              )}
+                              {canEdit && (
+                                <button onClick={() => removeNidoRow(espIndex, nidoIndex)} className="ml-auto text-xs text-rose-500 hover:underline shrink-0">
+                                  Quitar
+                                </button>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
                       {canEdit && (
-                        <button onClick={() => removeEspesorRow(espIndex)} className="ml-auto text-xs text-rose-500 hover:underline">
-                          Quitar espesor
+                        <button onClick={() => addNidoRow(espIndex)} className="mt-2 text-xs text-blue-600 hover:underline">
+                          + Agregar nido (otra chapa) a este espesor
                         </button>
                       )}
                     </div>
+                  ))}
 
-                    <p className="text-xs text-slate-500 mb-2">Nidos (una chapa por nido, con su tiempo de corte)</p>
-                    <div className="space-y-2">
-                      {esp.nidos.map((nido, nidoIndex) => (
-                        <div key={nidoIndex} className="flex items-center gap-2">
-                          <span className="text-xs text-slate-400 w-14 shrink-0">Nido {nidoIndex + 1}</span>
-                          <input
-                            type="number" placeholder="Minutos"
-                            value={nido.minutos}
-                            onChange={(e) => updateNidoMinutos(espIndex, nidoIndex, e.target.value)}
-                            disabled={!canEdit}
-                            className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-28 disabled:bg-slate-50 disabled:text-slate-400"
-                          />
-                          <span className="text-xs text-slate-400">min</span>
-                          {nido.minutos && (
-                            <span className="text-xs text-slate-400 italic">
-                              → "Nido {nidoIndex + 1} ({nido.minutos} min)"
-                            </span>
-                          )}
-                          {canEdit && (
-                            <button onClick={() => removeNidoRow(espIndex, nidoIndex)} className="ml-auto text-xs text-rose-500 hover:underline shrink-0">
-                              Quitar
-                            </button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                    {canEdit && (
-                      <button onClick={() => addNidoRow(espIndex)} className="mt-2 text-xs text-blue-600 hover:underline">
-                        + Agregar nido (otra chapa) a este espesor
-                      </button>
-                    )}
-                  </div>
-                ))}
-
-                {canEdit && (
-                  <button onClick={addEspesorRow} className="w-full text-sm text-slate-600 border border-dashed border-slate-300 rounded-md py-2 hover:bg-slate-50">
-                    + Agregar otro espesor
-                  </button>
-                )}
-              </div>
+                  {canEdit && (
+                    <button onClick={addEspesorRow} className="w-full text-sm text-slate-600 border border-dashed border-slate-300 rounded-md py-2 hover:bg-slate-50">
+                      + Agregar otro espesor
+                    </button>
+                  )}
+                </div>
+              </>
             )}
 
             {canEdit && (
@@ -794,6 +888,37 @@ export default function CatalogoProductosPage() {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: aviso de descuadre entre el desglose y el Catálogo */}
+      {laserMismatch && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
+            <div className="flex items-start gap-3 mb-3">
+              <span className="text-amber-500 text-2xl leading-none">⚠️</span>
+              <div>
+                <h3 className="font-semibold text-slate-800 text-lg">Los tiempos no coinciden</h3>
+                <p className="text-sm text-slate-500 mt-1">
+                  El desglose de nidos da un tiempo unitario de Láser distinto al que está cargado en el Catálogo para este producto. No pueden convivir dos tiempos diferentes.
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 rounded-lg p-3 mb-4 text-sm space-y-1">
+              <p className="text-slate-500">Según el desglose de nidos: <strong className="text-slate-700">{laserMismatch.computed} min/u.</strong></p>
+              <p className="text-slate-500">Cargado en el Catálogo: <strong className="text-slate-700">{laserMismatch.catalogValue != null ? `${laserMismatch.catalogValue} min/u.` : 'sin configurar'}</strong></p>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <button onClick={resolveLaserMismatchUpdateCatalog} className="w-full bg-blue-600 text-white rounded-md py-2 text-sm font-medium hover:bg-blue-700">
+                Actualizar el Catálogo a {laserMismatch.computed} min/u.
+              </button>
+              <button onClick={resolveLaserMismatchKeepEditing} className="w-full border border-slate-300 rounded-md py-2 text-sm text-slate-600 hover:bg-slate-50">
+                Dejarlo así, voy a revisar el desglose
+              </button>
+            </div>
           </div>
         </div>
       )}
