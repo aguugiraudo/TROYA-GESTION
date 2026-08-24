@@ -17,6 +17,16 @@ function formatDateShort(iso: string) {
   return `${d}/${m}`
 }
 
+// Convierte horas decimales (ej. 3.5) a formato "Xhs Ymin" (ej. "3hs 30min"), más fácil de leer para armar el pizarrón físico
+function formatHoursMinutes(hoursDecimal: number) {
+  const totalMinutes = Math.round(hoursDecimal * 60)
+  const h = Math.floor(totalMinutes / 60)
+  const m = totalMinutes % 60
+  if (h === 0) return `${m}min`
+  if (m === 0) return `${h}hs`
+  return `${h}hs ${m}min`
+}
+
 const SERVICE_VALUE = '__SERVICIO__'
 const FIVE_S_VALUE = '__5S__'
 
@@ -554,10 +564,10 @@ export default function PlanTurnosPage() {
 
           {!isSpecial && taskHours != null && (
             <p className="text-xs text-slate-500 mb-2">
-              Esta tarea representa <strong className="text-slate-700">{taskHours} hs</strong>.
+              Esta tarea representa <strong className="text-slate-700">{formatHoursMinutes(taskHours)}</strong>.
               {availableForSelected != null && (
                 <> Total si la confirmás: <strong className={hoursSoFar + taskHours > availableForSelected ? 'text-rose-600' : 'text-slate-700'}>
-                  {Math.round((hoursSoFar + taskHours) * 100) / 100} / {availableForSelected} hs
+                  {formatHoursMinutes(Math.round((hoursSoFar + taskHours) * 100) / 100)} / {formatHoursMinutes(availableForSelected)}
                 </strong>{hoursSoFar + taskHours > availableForSelected ? ' — supera la disponibilidad' : ''}.</>
               )}
             </p>
@@ -565,7 +575,7 @@ export default function PlanTurnosPage() {
           {isSpecial && fServiceHours && availableForSelected != null && (
             <p className="text-xs text-slate-500 mb-2">
               Total si confirmás: <strong className={hoursSoFar + parseFloat(fServiceHours || '0') > availableForSelected ? 'text-rose-600' : 'text-slate-700'}>
-                {Math.round((hoursSoFar + parseFloat(fServiceHours || '0')) * 100) / 100} / {availableForSelected} hs
+                {formatHoursMinutes(Math.round((hoursSoFar + parseFloat(fServiceHours || '0')) * 100) / 100)} / {formatHoursMinutes(availableForSelected)}
               </strong>
             </p>
           )}
@@ -591,7 +601,7 @@ export default function PlanTurnosPage() {
                 <div className="flex items-center justify-between mb-2 gap-2">
                   <p className="font-semibold text-slate-700 truncate min-w-0" title={name}>{name}</p>
                   <p className={`text-xs shrink-0 ${avail != null && totalHours > avail ? 'text-rose-600 font-medium' : 'text-slate-400'}`}>
-                    {totalHours} / {avail ?? '—'} hs programadas
+                    {formatHoursMinutes(totalHours)} / {avail != null ? formatHoursMinutes(avail) : '—'} programadas
                   </p>
                 </div>
 
@@ -603,9 +613,9 @@ export default function PlanTurnosPage() {
                           <th className="py-1 w-[110px]">Sector</th>
                           <th className="py-1">OP / Producto</th>
                           <th className="py-1 text-center w-[60px]">Objetivo</th>
-                          <th className="py-1 text-center w-[65px]">Tiempo</th>
+                          <th className="py-1 text-center w-[85px]">Tiempo</th>
                           <th className="py-1 text-center w-[75px]">Real</th>
-                          <th className="py-1 w-[120px]">Obs.</th>
+                          <th className="py-1 w-[110px]">Obs.</th>
                           <th className="py-1 w-[130px]"></th>
                         </tr>
                       </thead>
@@ -639,8 +649,8 @@ export default function PlanTurnosPage() {
                                 </button>
                               )}
                             </td>
-                            <td className="py-2 text-center text-slate-600 font-medium" title="Tiempo que representa esta tarea puntual — para armar la ventana horaria del operario">
-                              {t.hours_assigned != null ? `${Math.round(Number(t.hours_assigned) * 10) / 10}hs` : '—'}
+                            <td className="py-2 text-center text-slate-600 font-medium whitespace-nowrap" title="Tiempo que representa esta tarea puntual — para armar la ventana horaria del operario">
+                              {t.hours_assigned != null ? formatHoursMinutes(Number(t.hours_assigned)) : '—'}
                             </td>
                             <td className="py-2 text-center">
                               <div className="flex items-center justify-center gap-1">
@@ -740,8 +750,8 @@ export default function PlanTurnosPage() {
                             </div>
                             <div>
                               <p className="text-[10px] text-slate-400">Tiempo</p>
-                              <p className="text-sm font-semibold text-slate-600">
-                                {t.hours_assigned != null ? `${Math.round(Number(t.hours_assigned) * 10) / 10}hs` : '—'}
+                              <p className="text-sm font-semibold text-slate-600 whitespace-nowrap">
+                                {t.hours_assigned != null ? formatHoursMinutes(Number(t.hours_assigned)) : '—'}
                               </p>
                             </div>
                             <div>
@@ -806,7 +816,7 @@ export default function PlanTurnosPage() {
                         <div key={s.id} className="flex items-center justify-between gap-2 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
                           <div className="min-w-0">
                             <p className="text-sm text-slate-700">
-                              {s.sectors?.name} — <strong>{s.hours_assigned} hs</strong>
+                              {s.sectors?.name} — <strong>{formatHoursMinutes(Number(s.hours_assigned || 0))}</strong>
                               {s.quantity_services != null && ` — ${s.quantity_services} servicios`}
                             </p>
                             {s.notes && <p className="text-xs text-slate-500 italic">"{s.notes}"</p>}
@@ -828,7 +838,7 @@ export default function PlanTurnosPage() {
                         <div key={s.id} className="flex items-center justify-between gap-2 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">
                           <div className="min-w-0">
                             <p className="text-sm text-slate-700">
-                              {s.sectors?.name} — <strong>{s.hours_assigned} hs</strong>
+                              {s.sectors?.name} — <strong>{formatHoursMinutes(Number(s.hours_assigned || 0))}</strong>
                             </p>
                             {s.notes && <p className="text-xs text-slate-500 italic">"{s.notes}"</p>}
                           </div>
