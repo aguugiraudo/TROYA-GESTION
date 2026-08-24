@@ -41,7 +41,7 @@ export default function PlanTurnosPage() {
   const [showOperatorList, setShowOperatorList] = useState(false)
   const [fAvailableHours, setFAvailableHours] = useState('')
   const [fSector, setFSector] = useState('')
-  const [fOrder, setFOrder] = useState('') // puede ser un id de OP, o SERVICE_VALUE
+  const [fOrder, setFOrder] = useState('') // puede ser un id de OP, o SERVICE_VALUE / FIVE_S_VALUE
   const [fComponent, setFComponent] = useState('')
   const [fQuantity, setFQuantity] = useState('')
 
@@ -55,6 +55,7 @@ export default function PlanTurnosPage() {
   const [clockResult, setClockResult] = useState<{ type: 'ok' | 'more' | 'less'; diffPerUnit: number; newMinutes: number } | null>(null)
 
   const [editingTarget, setEditingTarget] = useState<string | null>(null)
+  const [reassigningTask, setReassigningTask] = useState<string | null>(null)
 
   const [loading, setLoading] = useState(true)
 
@@ -185,7 +186,7 @@ export default function PlanTurnosPage() {
 
   async function handleAssign() {
     if (!fOperator || !fSector || !fOrder) {
-      alert('Completá operario, sector y elegí una OP o Servicio.')
+      alert('Completá operario, sector y elegí una OP, Servicio o 5S.')
       return
     }
     if (availability[fOperator] == null) {
@@ -219,7 +220,7 @@ export default function PlanTurnosPage() {
       }
       const qty = parseInt(fQuantity, 10)
       if (pendingForSelectedRow != null && qty > pendingForSelectedRow) {
-        alert(`Esa OP solo tiene ${pendingForSelectedRow} unidades pendientes en este sector/componente (contando lo ya programado hoy).`)
+        alert(`Esa OP solo tiene ${pendingForSelectedRow} unidades pendientes en este sector/componente (contando lo ya programado hoy). Si ese pendiente en 0 se debe a una tarea de otro operario que no la va a hacer, reasignale esa tarea al operario correcto en vez de crear una nueva.`)
         return
       }
       const { error } = await supabase.from('operator_daily_tasks').insert({
@@ -266,6 +267,7 @@ export default function PlanTurnosPage() {
   // Edita la cantidad programada de una tarea ya asignada. Al bajarla (ej. de 10 a 8),
   // la diferencia queda automáticamente disponible para programar de nuevo: "lo ya programado"
   // se calcula siempre sumando el target_quantity ACTUAL de las tareas, no el original.
+  // Además recalcula las horas de esa tarea, que son las que se muestran en la columna "Tiempo".
   async function saveTargetQuantity(task: any, value: string) {
     const qty = Math.max(0, parseInt(value || '0', 10))
     if (qty === task.target_quantity) { setEditingTarget(null); return }
@@ -277,6 +279,21 @@ export default function PlanTurnosPage() {
       .eq('id', task.id)
     if (error) { alert('Error al editar la cantidad: ' + error.message); return }
     setEditingTarget(null)
+    fetchTasksAndAvailability(); fetchStatic()
+  }
+
+  // Reasigna una tarea YA CREADA a otro operario, sin tocar su cantidad ni su historial.
+  // Pensado para el caso: un operario tenía algo programado, no llegó a arrancarlo (Real sigue vacío),
+  // y otro operario va a terminar esa misma tarea — en vez de duplicarla o pelear con el "pendiente".
+  async function reassignOperator(task: any, newOperatorId: string) {
+    if (!newOperatorId || newOperatorId === task.operator_id) { setReassigningTask(null); return }
+    if (task.actual_quantity != null) {
+      const proceed = confirm('Esta tarea ya tiene un Real cargado a nombre del operario actual. Si la reasignás, ese Real y ese rendimiento van a pasar a figurar del nuevo operario. ¿Continuar igual?')
+      if (!proceed) { setReassigningTask(null); return }
+    }
+    const { error } = await supabase.from('operator_daily_tasks').update({ operator_id: newOperatorId }).eq('id', task.id)
+    if (error) { alert('Error al reasignar: ' + error.message); return }
+    setReassigningTask(null)
     fetchTasksAndAvailability(); fetchStatic()
   }
 
@@ -513,7 +530,12 @@ export default function PlanTurnosPage() {
                   max={pendingForSelectedRow ?? undefined}
                   onChange={(e) => setFQuantity(e.target.value)} className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full min-w-0" />
                 {pendingForSelectedRow != null && (
-                  <p className="text-xs text-slate-400 mt-0.5">Pendiente: {pendingForSelectedRow} u.</p>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Pendiente: {pendingForSelectedRow} u.
+                    {pendingForSelectedRow === 0 && (
+                      <span className="text-amber-600"> — si es 0 por una tarea sin cerrar de otro operario, reasignala más abajo en vez de crear una nueva.</span>
+                    )}
+                  </p>
                 )}
               </div>
             )}
@@ -578,12 +600,13 @@ export default function PlanTurnosPage() {
                     <table className="w-full text-sm table-fixed hidden md:table mb-2">
                       <thead>
                         <tr className="text-left text-slate-400 text-xs">
-                          <th className="py-1 w-[120px]">Sector</th>
+                          <th className="py-1 w-[110px]">Sector</th>
                           <th className="py-1">OP / Producto</th>
-                          <th className="py-1 text-center w-[65px]">Objetivo</th>
-                          <th className="py-1 text-center w-[80px]">Real</th>
-                          <th className="py-1 w-[150px]">Obs.</th>
-                          <th className="py-1 w-[55px]"></th>
+                          <th className="py-1 text-center w-[60px]">Objetivo</th>
+                          <th className="py-1 text-center w-[65px]">Tiempo</th>
+                          <th className="py-1 text-center w-[75px]">Real</th>
+                          <th className="py-1 w-[120px]">Obs.</th>
+                          <th className="py-1 w-[130px]"></th>
                         </tr>
                       </thead>
                       <tbody>
@@ -616,6 +639,9 @@ export default function PlanTurnosPage() {
                                 </button>
                               )}
                             </td>
+                            <td className="py-2 text-center text-slate-600 font-medium" title="Tiempo que representa esta tarea puntual — para armar la ventana horaria del operario">
+                              {t.hours_assigned != null ? `${Math.round(Number(t.hours_assigned) * 10) / 10}hs` : '—'}
+                            </td>
                             <td className="py-2 text-center">
                               <div className="flex items-center justify-center gap-1">
                                 <input
@@ -643,7 +669,31 @@ export default function PlanTurnosPage() {
                             </td>
                             <td className="py-2 text-right">
                               {canEdit && (
-                                <button onClick={() => deleteTask(t.id)} className="text-xs text-rose-500 hover:underline">Eliminar</button>
+                                <div className="flex items-center justify-end gap-2 flex-wrap">
+                                  {reassigningTask === t.id ? (
+                                    <select
+                                      autoFocus
+                                      defaultValue=""
+                                      onChange={(e) => reassignOperator(t, e.target.value)}
+                                      onBlur={() => setReassigningTask(null)}
+                                      className="text-xs border border-blue-300 rounded-md px-1 py-1"
+                                    >
+                                      <option value="" disabled>Pasar a...</option>
+                                      {operators.filter((o) => o.id !== t.operator_id).map((o) => (
+                                        <option key={o.id} value={o.id}>{o.full_name}</option>
+                                      ))}
+                                    </select>
+                                  ) : (
+                                    <button
+                                      onClick={() => setReassigningTask(t.id)}
+                                      title="Pasarle esta tarea a otro operario, sin tocar la cantidad"
+                                      className="text-xs text-blue-600 hover:underline"
+                                    >
+                                      Reasignar
+                                    </button>
+                                  )}
+                                  <button onClick={() => deleteTask(t.id)} className="text-xs text-rose-500 hover:underline">Eliminar</button>
+                                </div>
                               )}
                             </td>
                           </tr>
@@ -689,6 +739,12 @@ export default function PlanTurnosPage() {
                               )}
                             </div>
                             <div>
+                              <p className="text-[10px] text-slate-400">Tiempo</p>
+                              <p className="text-sm font-semibold text-slate-600">
+                                {t.hours_assigned != null ? `${Math.round(Number(t.hours_assigned) * 10) / 10}hs` : '—'}
+                              </p>
+                            </div>
+                            <div>
                               <p className="text-[10px] text-slate-400">Real</p>
                               <div className="flex items-center gap-1">
                                 <input
@@ -713,6 +769,29 @@ export default function PlanTurnosPage() {
                             disabled={!canEdit}
                             className="w-full rounded-md border border-slate-300 py-1.5 px-2 text-xs min-w-0 disabled:bg-slate-50 disabled:text-slate-400"
                           />
+                          {canEdit && (
+                            reassigningTask === t.id ? (
+                              <select
+                                autoFocus
+                                defaultValue=""
+                                onChange={(e) => reassignOperator(t, e.target.value)}
+                                onBlur={() => setReassigningTask(null)}
+                                className="mt-2 w-full text-xs border border-blue-300 rounded-md px-2 py-1.5"
+                              >
+                                <option value="" disabled>Pasarle esta tarea a...</option>
+                                {operators.filter((o) => o.id !== t.operator_id).map((o) => (
+                                  <option key={o.id} value={o.id}>{o.full_name}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <button
+                                onClick={() => setReassigningTask(t.id)}
+                                className="mt-2 text-xs text-blue-600 hover:underline"
+                              >
+                                Reasignar a otro operario
+                              </button>
+                            )
+                          )}
                         </div>
                       ))}
                     </div>
