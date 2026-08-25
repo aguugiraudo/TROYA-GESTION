@@ -37,7 +37,6 @@ export default function Nav() {
   const pathname = usePathname()
   const [open, setOpen] = useState(false)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
-  const [openDropdown, setOpenDropdown] = useState<string | null>(null)
   const [openMobileGroup, setOpenMobileGroup] = useState<string | null>(null)
   const { role, fullName, logout } = useAuth()
 
@@ -52,75 +51,52 @@ export default function Nav() {
 
   const initial = fullName ? fullName.trim().charAt(0).toUpperCase() : '?'
 
-  function groupIsActive(tabs: { href: string }[]) {
-    return tabs.some((t) => t.href === pathname)
-  }
+  // El grupo "activo" es el que contiene la página actual — ese es el que muestra la segunda fila de sub-pestañas
+  const activeGroup = visibleGroups.find((g) => g.tabs.some((t) => t.href === pathname)) || null
 
   return (
     <nav className="bg-slate-900 sticky top-0 z-40">
       <div className="flex items-center justify-between px-4 md:px-6 h-14">
-        <Link href="/" className="shrink-0 flex items-center">
-          <Image src="/logo_troya_white.png" alt="Troya" width={120} height={42} className="h-8 w-auto" priority />
-        </Link>
+        <div className="flex items-center gap-5 min-w-0">
+          <Link href="/" className="shrink-0 flex items-center">
+            <Image src="/logo_troya_white.png" alt="Troya" width={120} height={42} className="h-8 w-auto" priority />
+          </Link>
 
-        <div className="hidden md:flex items-center gap-4">
-          {visibleGroups.map((g) => {
-            const active = groupIsActive(g.tabs)
-            return (
-              <div key={g.key} className="relative">
-                <button
-                  onClick={() => setOpenDropdown(openDropdown === g.key ? null : g.key)}
-                  className={`text-sm whitespace-nowrap pb-1 border-b-2 transition flex items-center gap-1 ${
+          <div className="hidden md:flex items-center gap-4">
+            {visibleGroups.map((g) => {
+              const active = g.key === activeGroup?.key
+              return (
+                <Link
+                  key={g.key}
+                  href={g.tabs[0].href}
+                  className={`text-sm whitespace-nowrap pb-1 border-b-2 transition ${
                     active
                       ? 'text-white font-medium border-blue-400'
                       : 'text-slate-400 border-transparent hover:text-slate-200'
                   }`}
                 >
                   {g.label}
-                  <span className={`text-[10px] transition-transform ${openDropdown === g.key ? 'rotate-180' : ''}`}>▾</span>
-                </button>
-                {openDropdown === g.key && (
-                  <>
-                    <div className="fixed inset-0 z-10" onClick={() => setOpenDropdown(null)} />
-                    <div className="absolute left-0 top-full mt-2 w-56 bg-white rounded-lg shadow-lg border border-slate-200 py-1.5 z-20">
-                      {g.tabs.map((t) => {
-                        const tabActive = pathname === t.href
-                        return (
-                          <Link
-                            key={t.href}
-                            href={t.href}
-                            onClick={() => setOpenDropdown(null)}
-                            className={`block px-3 py-2 text-sm ${
-                              tabActive ? 'text-slate-900 font-medium bg-slate-50' : 'text-slate-600 hover:bg-slate-50'
-                            }`}
-                          >
-                            {t.label}
-                          </Link>
-                        )
-                      })}
-                    </div>
-                  </>
-                )}
-              </div>
-            )
-          })}
+                </Link>
+              )
+            })}
 
-          {visibleStandalone.map((t) => {
-            const active = pathname === t.href
-            return (
-              <Link
-                key={t.href}
-                href={t.href}
-                className={`text-sm whitespace-nowrap pb-1 border-b-2 transition ${
-                  active
-                    ? 'text-white font-medium border-blue-400'
-                    : 'text-slate-400 border-transparent hover:text-slate-200'
-                }`}
-              >
-                {t.label}
-              </Link>
-            )
-          })}
+            {visibleStandalone.map((t) => {
+              const active = pathname === t.href
+              return (
+                <Link
+                  key={t.href}
+                  href={t.href}
+                  className={`text-sm whitespace-nowrap pb-1 border-b-2 transition ${
+                    active
+                      ? 'text-white font-medium border-blue-400'
+                      : 'text-slate-400 border-transparent hover:text-slate-200'
+                  }`}
+                >
+                  {t.label}
+                </Link>
+              )
+            })}
+          </div>
         </div>
 
         <div className="flex items-center gap-3">
@@ -156,6 +132,28 @@ export default function Nav() {
           </button>
         </div>
       </div>
+
+      {/* Segunda fila: sub-pestañas del grupo activo (estilo Odoo, siempre visible mientras estés en ese grupo) */}
+      {activeGroup && (
+        <div className="hidden md:flex items-center gap-4 bg-slate-800 border-t border-slate-700 px-4 md:px-6 h-10">
+          {activeGroup.tabs.map((t) => {
+            const active = pathname === t.href
+            return (
+              <Link
+                key={t.href}
+                href={t.href}
+                className={`text-sm whitespace-nowrap pb-1 border-b-2 transition ${
+                  active
+                    ? 'text-white font-medium border-blue-400'
+                    : 'text-slate-400 border-transparent hover:text-slate-200'
+                }`}
+              >
+                {t.label}
+              </Link>
+            )
+          })}
+        </div>
+      )}
 
       {open && (
         <div className="md:hidden bg-slate-800 border-t border-slate-700 px-4 py-2">

@@ -17,7 +17,6 @@ function formatDateShort(iso: string) {
   return `${d}/${m}`
 }
 
-// Convierte horas decimales (ej. 3.5) a formato "Xhs Ymin" (ej. "3hs 30min"), más fácil de leer para armar el pizarrón físico
 function formatHoursMinutes(hoursDecimal: number) {
   const totalMinutes = Math.round(hoursDecimal * 60)
   const h = Math.floor(totalMinutes / 60)
@@ -25,6 +24,11 @@ function formatHoursMinutes(hoursDecimal: number) {
   if (h === 0) return `${m}min`
   if (m === 0) return `${h}hs`
   return `${h}hs ${m}min`
+}
+
+function isLaserSectorName(name: string) {
+  const n = name.toLowerCase()
+  return n.includes('láser') || n.includes('laser')
 }
 
 const SERVICE_VALUE = '__SERVICIO__'
@@ -59,6 +63,14 @@ export default function PlanTurnosPage() {
   const [fServiceQty, setFServiceQty] = useState('')
   const [fServiceNotes, setFServiceNotes] = useState('')
 
+  // --- Desglose Láser: nidos disponibles para la OP/sector elegidos ---
+  const [laserLoteInfo, setLaserLoteInfo] = useState<{
+    loteId: string
+    nidos: { id: string; numero: number; espesorMm: number; corte: number; carga: number }[]
+    assignedNidoIds: Set<string>
+  } | null>(null)
+  const [selectedNidoId, setSelectedNidoId] = useState('')
+
   const [clockTask, setClockTask] = useState<any | null>(null)
   const [clockStart, setClockStart] = useState('')
   const [clockEnd, setClockEnd] = useState('')
@@ -75,7 +87,7 @@ export default function PlanTurnosPage() {
     const { data: sectorsData } = await supabase.from('sectors').select('*').order('sequence_no')
     setSectors(sectorsData || [])
     const { data: ordersData } = await supabase
-      .from('orders').select('id, order_number, products(name)').in('status', ['pending', 'in_progress'])
+      .from('orders').select('id, order_number, product_id, lot_quantity, products(name)').in('status', ['pending', 'in_progress'])
     setOrders(ordersData || [])
 
     const orderIds = (ordersData || []).map((o: any) => o.id)
@@ -88,7 +100,7 @@ export default function PlanTurnosPage() {
   async function fetchTasksAndAvailability() {
     const { data: taskData } = await supabase
       .from('operator_daily_tasks')
-      .select('*, operators(full_name), orders(order_number, products(name)), sectors(name), components(name)')
+      .select('*, operators(full_name), orders(order_number, products(name)), sectors(name), components(name), laser_nidos(numero, standard_time_minutes, carga_descarga_minutes, laser_espesores(espesor_mm))')
       .eq('plan_date', planDate)
       .order('created_at')
     setTasks(taskData || [])
@@ -113,6 +125,45 @@ export default function PlanTurnosPage() {
   }, [])
 
   useEffect(() => { fetchTasksAndAvailability() }, [planDate])
+
+  // Carga el Desglose Láser (si existe) para la OP y sector elegidos en el formulario
+  useEffect(() => {
+    async function loadLaserInfo() {
+      setLaserLoteInfo(null)
+      setSelectedNidoId('')
+
+      if (!fSector || !fOrder || fOrder === SERVICE_VALUE || fOrder === FIVE_S_VALUE) return
+      const sector = sectors.find((s) => s.id === fSector)
+      if (!sector || !isLaserSectorName(sector.name)) return
+      const order = orders.find((o) => o.id === fOrder)
+      if (!order) return
+
+      const { data: lote } = await supabase
+        .from('laser_lotes').select('id').eq('product_id', order.product_id).eq('lote_qty', order.lot_quantity).maybeSingle()
+      if (!lote) return
+
+      const { data: espesores } = await supabase.from('laser_espesores').select('*').eq('laser_lote_id', lote.id)
+      const espIds = (espesores || []).map((e: any) => e.id)
+      if (espIds.length === 0) return
+
+      const { data: nidosData } = await supabase.from('laser_nidos').select('*').in('laser_espesor_id', espIds)
+      const nidos = (nidosData || []).map((n: any) => {
+        const esp = (espesores || []).find((e: any) => e.id === n.laser_espesor_id)
+        return {
+          id: n.id, numero: n.numero, espesorMm: esp ? Number(esp.espesor_mm) : 0,
+          corte: Number(n.standard_time_minutes), carga: Number(n.carga_descarga_minutes || 0),
+        }
+      }).sort((a: any, b: any) => a.espesorMm - b.espesorMm || a.numero - b.numero)
+      if (nidos.length === 0) return
+
+      const { data: assignedTasks } = await supabase
+        .from('operator_daily_tasks').select('laser_nido_id').eq('order_id', order.id).not('laser_nido_id', 'is', null)
+      const assignedNidoIds = new Set((assignedTasks || []).map((t: any) => t.laser_nido_id))
+
+      setLaserLoteInfo({ loteId: lote.id, nidos, assignedNidoIds })
+    }
+    loadLaserInfo()
+  }, [fSector, fOrder, sectors, orders])
 
   async function addOperator() {
     if (!newOperatorName.trim()) return
@@ -149,6 +200,7 @@ export default function PlanTurnosPage() {
   const isService = fOrder === SERVICE_VALUE
   const isFiveS = fOrder === FIVE_S_VALUE
   const isSpecial = isService || isFiveS
+  const isLaserNidoFlow = !isSpecial && !!laserLoteInfo
 
   const ordersForSector = fSector
     ? orders.filter((o) => progressRows.some((r) => r.order_id === o.id && r.sector_id === fSector && r.quantity_completed < r.quantity_required))
@@ -157,7 +209,7 @@ export default function PlanTurnosPage() {
   const rowsForOrderSector = (fSector && fOrder && !isSpecial)
     ? progressRows.filter((r) => r.order_id === fOrder && r.sector_id === fSector)
     : []
-  const needsComponent = rowsForOrderSector.length > 1 || (rowsForOrderSector[0]?.target_type === 'component')
+  const needsComponent = !isLaserNidoFlow && (rowsForOrderSector.length > 1 || (rowsForOrderSector[0]?.target_type === 'component'))
   const selectedRow = needsComponent
     ? rowsForOrderSector.find((r) => r.component_id === fComponent)
     : rowsForOrderSector[0]
@@ -178,6 +230,23 @@ export default function PlanTurnosPage() {
     return Math.round(((qty * selectedRow.standard_time_minutes) / 60) * 100) / 100
   })()
 
+  // Nidos todavía no asignados (en NINGÚN día) para esta OP
+  const availableNidos = laserLoteInfo
+    ? laserLoteInfo.nidos.filter((n) => !laserLoteInfo.assignedNidoIds.has(n.id))
+    : []
+  const totalLoteMinutes = laserLoteInfo
+    ? laserLoteInfo.nidos.reduce((s, n) => s + n.corte + n.carga, 0)
+    : 0
+  const selectedNido = availableNidos.find((n) => n.id === selectedNidoId) || null
+  const selectedOrderForNido = orders.find((o) => o.id === fOrder)
+
+  // Cantidad de producto que representa el nido elegido, proporcional a su peso en minutos sobre el total del lote
+  function nidoQuantity(nido: { corte: number; carga: number }) {
+    if (!selectedOrderForNido || totalLoteMinutes <= 0) return 0
+    const nidoTotal = nido.corte + nido.carga
+    return Math.round(selectedOrderForNido.lot_quantity * (nidoTotal / totalLoteMinutes))
+  }
+
   function hoursProgrammedFor(operatorId: string) {
     const opHours = tasks.filter((t) => t.operator_id === operatorId)
       .reduce((sum, t) => sum + Number(t.hours_assigned || 0), 0)
@@ -192,6 +261,7 @@ export default function PlanTurnosPage() {
   function resetForm() {
     setFSector(''); setFOrder(''); setFComponent(''); setFQuantity('')
     setFServiceHours(''); setFServiceQty(''); setFServiceNotes('')
+    setLaserLoteInfo(null); setSelectedNidoId('')
   }
 
   async function handleAssign() {
@@ -219,6 +289,23 @@ export default function PlanTurnosPage() {
         notes: fServiceNotes || null,
       })
       if (error) { alert('Error al asignar: ' + error.message); return }
+    } else if (isLaserNidoFlow) {
+      if (!selectedNido) { alert('Elegí un nido para programar.'); return }
+      const qty = nidoQuantity(selectedNido)
+      const nidoStandardMinutes = qty > 0 ? (selectedNido.corte + selectedNido.carga) / qty : 0
+      const { error } = await supabase.from('operator_daily_tasks').insert({
+        operator_id: fOperator,
+        plan_date: planDate,
+        sector_id: fSector,
+        order_id: fOrder,
+        component_id: null,
+        laser_nido_id: selectedNido.id,
+        hours_assigned: Math.round(((selectedNido.corte + selectedNido.carga) / 60) * 100) / 100,
+        target_quantity: qty,
+        standard_time_minutes: nidoStandardMinutes,
+        catalog_time_id: selectedRow?.catalog_time_id ?? null,
+      })
+      if (error) { alert('Error al asignar el nido: ' + error.message); return }
     } else {
       if (!fQuantity) {
         alert('Completá la cantidad a programar.')
@@ -293,8 +380,6 @@ export default function PlanTurnosPage() {
   }
 
   // Reasigna una tarea YA CREADA a otro operario, sin tocar su cantidad ni su historial.
-  // Pensado para el caso: un operario tenía algo programado, no llegó a arrancarlo (Real sigue vacío),
-  // y otro operario va a terminar esa misma tarea — en vez de duplicarla o pelear con el "pendiente".
   async function reassignOperator(task: any, newOperatorId: string) {
     if (!newOperatorId || newOperatorId === task.operator_id) { setReassigningTask(null); return }
     if (task.actual_quantity != null) {
@@ -396,6 +481,13 @@ export default function PlanTurnosPage() {
     if (!tasksByOperator[name]) tasksByOperator[name] = { id: t.operator_id, tasks: [], services: [] }
     tasksByOperator[name].services.push(t)
   })
+
+  function nidoLabel(t: any) {
+    if (!t.laser_nidos) return null
+    const total = Number(t.laser_nidos.standard_time_minutes) + Number(t.laser_nidos.carga_descarga_minutes || 0)
+    const esp = t.laser_nidos.laser_espesores?.espesor_mm
+    return `Nido ${t.laser_nidos.numero}${esp ? ` (${esp}mm)` : ''} — ${Math.round(total)} min`
+  }
 
   const ClockButton = ({ t }: { t: any }) => (
     canEdit ? (
@@ -528,12 +620,34 @@ export default function PlanTurnosPage() {
                 <option value="">Componente...</option>
                 {rowsForOrderSector.map((r) => <option key={r.component_id} value={r.component_id}>{r.component_name}</option>)}
               </select>
+            ) : isLaserNidoFlow ? (
+              <select value={selectedNidoId} onChange={(e) => setSelectedNidoId(e.target.value)}
+                className="border border-emerald-400 bg-emerald-50 rounded-md px-2 py-1.5 text-sm min-w-0 truncate w-full">
+                <option value="">Nido...</option>
+                {availableNidos.length === 0 ? (
+                  <option value="" disabled>Sin nidos disponibles (todos ya asignados)</option>
+                ) : availableNidos.map((n) => (
+                  <option key={n.id} value={n.id}>
+                    {n.espesorMm}mm — Nido {n.numero} ({Math.round(n.corte + n.carga)} min)
+                  </option>
+                ))}
+              </select>
             ) : !isSpecial ? <div className="hidden md:block" /> : null}
 
             {isSpecial ? (
               <input placeholder="Horas dedicadas" type="number" step={0.5} value={fServiceHours}
                 onChange={(e) => setFServiceHours(e.target.value)}
                 className={`rounded-md px-2 py-1.5 text-sm w-full min-w-0 border ${isFiveS ? 'border-emerald-300' : 'border-blue-300'}`} />
+            ) : isLaserNidoFlow ? (
+              <div className="min-w-0 flex items-center">
+                {selectedNido ? (
+                  <p className="text-xs text-slate-500">
+                    Representa <strong className="text-slate-700">{nidoQuantity(selectedNido)} u.</strong> del lote de {selectedOrderForNido?.lot_quantity}
+                  </p>
+                ) : (
+                  <p className="text-xs text-slate-400">Elegí un nido para ver la cantidad que representa</p>
+                )}
+              </div>
             ) : (
               <div className="min-w-0">
                 <input placeholder="Cantidad a programar" type="number" value={fQuantity}
@@ -562,12 +676,12 @@ export default function PlanTurnosPage() {
             </div>
           )}
 
-          {!isSpecial && taskHours != null && (
+          {!isSpecial && !isLaserNidoFlow && taskHours != null && (
             <p className="text-xs text-slate-500 mb-2">
-              Esta tarea representa <strong className="text-slate-700">{formatHoursMinutes(taskHours)}</strong>.
+              Esta tarea representa <strong className="text-slate-700">{taskHours} hs</strong>.
               {availableForSelected != null && (
                 <> Total si la confirmás: <strong className={hoursSoFar + taskHours > availableForSelected ? 'text-rose-600' : 'text-slate-700'}>
-                  {formatHoursMinutes(Math.round((hoursSoFar + taskHours) * 100) / 100)} / {formatHoursMinutes(availableForSelected)}
+                  {Math.round((hoursSoFar + taskHours) * 100) / 100} / {availableForSelected} hs
                 </strong>{hoursSoFar + taskHours > availableForSelected ? ' — supera la disponibilidad' : ''}.</>
               )}
             </p>
@@ -575,15 +689,20 @@ export default function PlanTurnosPage() {
           {isSpecial && fServiceHours && availableForSelected != null && (
             <p className="text-xs text-slate-500 mb-2">
               Total si confirmás: <strong className={hoursSoFar + parseFloat(fServiceHours || '0') > availableForSelected ? 'text-rose-600' : 'text-slate-700'}>
-                {formatHoursMinutes(Math.round((hoursSoFar + parseFloat(fServiceHours || '0')) * 100) / 100)} / {formatHoursMinutes(availableForSelected)}
+                {Math.round((hoursSoFar + parseFloat(fServiceHours || '0')) * 100) / 100} / {availableForSelected} hs
               </strong>
+            </p>
+          )}
+          {isLaserNidoFlow && selectedNido && (
+            <p className="text-xs text-slate-500 mb-2">
+              Esta tarea representa <strong className="text-slate-700">{formatHoursMinutes((selectedNido.corte + selectedNido.carga) / 60)}</strong> (corte + carga/descarga).
             </p>
           )}
 
           <button onClick={handleAssign} className={`mt-2 w-full sm:w-auto text-white px-4 py-2 rounded-md text-sm font-medium ${
-            isService ? 'bg-blue-600 hover:bg-blue-700' : isFiveS ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-emerald-600 hover:bg-emerald-700'
+            isService ? 'bg-blue-600 hover:bg-blue-700' : 'bg-emerald-600 hover:bg-emerald-700'
           }`}>
-            {isService ? 'Asignar servicio' : isFiveS ? 'Asignar 5S' : 'Asignar tarea'}
+            {isService ? 'Asignar servicio' : isFiveS ? 'Asignar 5S' : isLaserNidoFlow ? 'Asignar nido' : 'Asignar tarea'}
           </button>
         </div>
       )}
@@ -601,7 +720,7 @@ export default function PlanTurnosPage() {
                 <div className="flex items-center justify-between mb-2 gap-2">
                   <p className="font-semibold text-slate-700 truncate min-w-0" title={name}>{name}</p>
                   <p className={`text-xs shrink-0 ${avail != null && totalHours > avail ? 'text-rose-600 font-medium' : 'text-slate-400'}`}>
-                    {formatHoursMinutes(totalHours)} / {avail != null ? formatHoursMinutes(avail) : '—'} programadas
+                    {totalHours} / {avail ?? '—'} hs programadas
                   </p>
                 </div>
 
@@ -613,7 +732,7 @@ export default function PlanTurnosPage() {
                           <th className="py-1 w-[110px]">Sector</th>
                           <th className="py-1">OP / Producto</th>
                           <th className="py-1 text-center w-[60px]">Objetivo</th>
-                          <th className="py-1 text-center w-[85px]">Tiempo</th>
+                          <th className="py-1 text-center w-[65px]">Tiempo</th>
                           <th className="py-1 text-center w-[75px]">Real</th>
                           <th className="py-1 w-[110px]">Obs.</th>
                           <th className="py-1 w-[130px]"></th>
@@ -626,6 +745,9 @@ export default function PlanTurnosPage() {
                             <td className="py-2 leading-tight">
                               <div className="text-xs text-slate-400">#{t.orders?.order_number}</div>
                               <div className="text-slate-700">{t.orders?.products?.name}</div>
+                              {nidoLabel(t) && (
+                                <div className="text-[10px] text-emerald-700 bg-emerald-50 rounded px-1.5 py-0.5 inline-block mt-0.5">{nidoLabel(t)}</div>
+                              )}
                             </td>
                             <td className="py-2 text-center font-medium">
                               {canEdit && editingTarget === t.id ? (
@@ -720,6 +842,9 @@ export default function PlanTurnosPage() {
                               <p className="text-sm font-medium text-slate-700 break-words">
                                 #{t.orders?.order_number} — {t.orders?.products?.name}
                               </p>
+                              {nidoLabel(t) && (
+                                <div className="text-[10px] text-emerald-700 bg-emerald-50 rounded px-1.5 py-0.5 inline-block mt-1">{nidoLabel(t)}</div>
+                              )}
                             </div>
                             {canEdit && (
                               <button onClick={() => deleteTask(t.id)} className="text-xs text-rose-500 hover:underline shrink-0">Eliminar</button>
@@ -816,7 +941,7 @@ export default function PlanTurnosPage() {
                         <div key={s.id} className="flex items-center justify-between gap-2 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
                           <div className="min-w-0">
                             <p className="text-sm text-slate-700">
-                              {s.sectors?.name} — <strong>{formatHoursMinutes(Number(s.hours_assigned || 0))}</strong>
+                              {s.sectors?.name} — <strong>{s.hours_assigned} hs</strong>
                               {s.quantity_services != null && ` — ${s.quantity_services} servicios`}
                             </p>
                             {s.notes && <p className="text-xs text-slate-500 italic">"{s.notes}"</p>}
@@ -838,7 +963,7 @@ export default function PlanTurnosPage() {
                         <div key={s.id} className="flex items-center justify-between gap-2 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">
                           <div className="min-w-0">
                             <p className="text-sm text-slate-700">
-                              {s.sectors?.name} — <strong>{formatHoursMinutes(Number(s.hours_assigned || 0))}</strong>
+                              {s.sectors?.name} — <strong>{s.hours_assigned} hs</strong>
                             </p>
                             {s.notes && <p className="text-xs text-slate-500 italic">"{s.notes}"</p>}
                           </div>
