@@ -789,7 +789,7 @@ export default function PlanTurnosPage() {
                   </p>
                 </div>
 
-                {group.tasks.length > 0 && (
+                {(group.tasks.length > 0 || group.services.filter((s: any) => s.category !== '5s').length > 0) && (
                   <>
                     <table className="w-full text-sm table-fixed hidden md:table mb-2">
                       <thead>
@@ -895,6 +895,36 @@ export default function PlanTurnosPage() {
                             </td>
                           </tr>
                         ))}
+                        {group.services.filter((s: any) => s.category !== '5s').map((s: any) => (
+                          <tr key={s.id} className="border-t border-slate-100 align-top bg-blue-50/30">
+                            <td className="py-2">{s.sectors?.name}</td>
+                            <td className="py-2 leading-tight">
+                              <div className="text-xs text-slate-400">Servicio</div>
+                              <div className="text-slate-700">{s.notes || '—'}</div>
+                            </td>
+                            <td className="py-2 text-center font-medium text-slate-300">—</td>
+                            <td className="py-2 text-center text-slate-600 font-medium whitespace-nowrap">
+                              {formatHoursMinutes(Number(s.hours_assigned || 0))}
+                            </td>
+                            <td className="py-2 text-center">
+                              <input
+                                type="checkbox"
+                                checked={!!s.completed}
+                                onChange={() => toggleServiceCompleted(s)}
+                                disabled={!canEdit}
+                                className="w-4 h-4 accent-emerald-600"
+                              />
+                            </td>
+                            <td className="py-2">
+                              <span className="text-slate-300 text-xs">—</span>
+                            </td>
+                            <td className="py-2 text-right">
+                              {canEdit && (
+                                <button onClick={() => deleteServiceTask(s.id)} className="text-xs text-rose-500 hover:underline">Eliminar</button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
                       </tbody>
                     </table>
 
@@ -994,38 +1024,37 @@ export default function PlanTurnosPage() {
                           )}
                         </div>
                       ))}
+                      {group.services.filter((s: any) => s.category !== '5s').map((s: any) => (
+                        <div key={s.id} className="border border-blue-100 bg-blue-50/30 rounded-lg p-3 min-w-0">
+                          <div className="flex items-start justify-between gap-2 mb-2">
+                            <div className="min-w-0 flex-1">
+                              <p className="text-xs text-slate-400">{s.sectors?.name}</p>
+                              <p className="text-sm font-medium text-slate-700 break-words">Servicio — {s.notes || '—'}</p>
+                            </div>
+                            {canEdit && (
+                              <button onClick={() => deleteServiceTask(s.id)} className="text-xs text-rose-500 hover:underline shrink-0">Eliminar</button>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-4">
+                            <div>
+                              <p className="text-[10px] text-slate-400">Objetivo</p>
+                              <p className="text-sm font-semibold text-slate-300">—</p>
+                            </div>
+                            <div>
+                              <p className="text-[10px] text-slate-400">Tiempo</p>
+                              <p className="text-sm font-semibold text-slate-600 whitespace-nowrap">{formatHoursMinutes(Number(s.hours_assigned || 0))}</p>
+                            </div>
+                            <div>
+                              <p className="text-[10px] text-slate-400">Real</p>
+                              <input type="checkbox" checked={!!s.completed} onChange={() => toggleServiceCompleted(s)} disabled={!canEdit} className="w-4 h-4 accent-emerald-600 mt-1" />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </>
                 )}
 
-                {group.services.filter((s: any) => s.category !== '5s').length > 0 && (
-                  <div className="mb-2">
-                    <p className="text-xs font-medium text-blue-600 mb-1.5">Servicios</p>
-                    <div className="flex flex-col gap-2">
-                      {group.services.filter((s: any) => s.category !== '5s').map((s: any) => (
-                        <div key={s.id} className="flex items-center justify-between gap-2 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
-                          <label className="flex items-center gap-2 min-w-0 cursor-pointer">
-                            {canEdit ? (
-                              <input type="checkbox" checked={!!s.completed} onChange={() => toggleServiceCompleted(s)} className="shrink-0 w-4 h-4 accent-emerald-600" />
-                            ) : (
-                              <span className={`shrink-0 text-sm ${s.completed ? 'text-emerald-600' : 'text-slate-300'}`}>{s.completed ? '✓' : '○'}</span>
-                            )}
-                            <div className="min-w-0">
-                              <p className={`text-sm ${s.completed ? 'text-slate-400 line-through' : 'text-slate-700'}`}>
-                                {s.sectors?.name} — <strong>{s.hours_assigned} hs</strong>
-                                {s.quantity_services != null && ` — ${s.quantity_services} servicios`}
-                              </p>
-                              {s.notes && <p className={`text-xs italic ${s.completed ? 'text-slate-300' : 'text-slate-500'}`}>"{s.notes}"</p>}
-                            </div>
-                          </label>
-                          {canEdit && (
-                            <button onClick={() => deleteServiceTask(s.id)} className="text-xs text-rose-500 hover:underline shrink-0">Eliminar</button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
 
                 {group.services.filter((s: any) => s.category === '5s').length > 0 && (
                   <div>

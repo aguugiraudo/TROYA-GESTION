@@ -54,6 +54,7 @@ export default function PlanDiarioPage() {
   const [progressDetailRows, setProgressDetailRows] = useState<any[]>([])
   const [tasks, setTasks] = useState<any[]>([])
   const [laserServiceTasks, setLaserServiceTasks] = useState<any[]>([])
+  const [allServiceTasks, setAllServiceTasks] = useState<any[]>([])
   const [allTasksByOrder, setAllTasksByOrder] = useState<Record<string, any[]>>({})
   const [loading, setLoading] = useState(true)
   const [orderDetailModal, setOrderDetailModal] = useState<{ order: any; date: string } | null>(null)
@@ -85,6 +86,7 @@ export default function PlanDiarioPage() {
       .lte('plan_date', satDate)
     const laserOnly = (serviceData || []).filter((s: any) => s.sectors?.name && isLaserSectorName(s.sectors.name))
     setLaserServiceTasks(laserOnly)
+    setAllServiceTasks(serviceData || [])
 
     const { data: activeOrders } = await supabase
       .from('orders')
@@ -203,11 +205,22 @@ export default function PlanDiarioPage() {
 
   function plantDayResult(date: string) {
     const dayTasks = tasks.filter((t) => t.plan_date === date)
-    if (dayTasks.length === 0) return null
+    const dayServices = allServiceTasks.filter((s) => s.plan_date === date)
+    if (dayTasks.length === 0 && dayServices.length === 0) return null
 
-    const progMinutes = dayTasks.reduce((sum, t) => sum + t.target_quantity * (t.standard_time_minutes || 0), 0)
-    const hasAnyActual = dayTasks.some((t) => t.actual_quantity != null)
-    const realMinutes = dayTasks.reduce((sum, t) => sum + (t.actual_quantity != null ? t.actual_quantity * (t.standard_time_minutes || 0) : 0), 0)
+    // Producción (tareas de OP)
+    const taskProgMinutes = dayTasks.reduce((sum, t) => sum + t.target_quantity * (t.standard_time_minutes || 0), 0)
+    const hasAnyTaskActual = dayTasks.some((t) => t.actual_quantity != null)
+    const taskRealMinutes = dayTasks.reduce((sum, t) => sum + (t.actual_quantity != null ? t.actual_quantity * (t.standard_time_minutes || 0) : 0), 0)
+
+    // Servicios: el objetivo es cada servicio programado (sus minutos); el real son los ya marcados como completados
+    const serviceProgMinutes = dayServices.reduce((sum, s) => sum + Number(s.hours_assigned || 0) * 60, 0)
+    const hasAnyServiceActual = dayServices.some((s) => s.completed)
+    const serviceRealMinutes = dayServices.reduce((sum, s) => sum + (s.completed ? Number(s.hours_assigned || 0) * 60 : 0), 0)
+
+    const progMinutes = taskProgMinutes + serviceProgMinutes
+    const realMinutes = taskRealMinutes + serviceRealMinutes
+    const hasAnyActual = hasAnyTaskActual || hasAnyServiceActual
 
     const progHoras = Math.round((progMinutes / 60) * 10) / 10
     const realHoras = hasAnyActual ? Math.round((realMinutes / 60) * 10) / 10 : null
@@ -229,10 +242,21 @@ export default function PlanDiarioPage() {
 
   function weekResult() {
     const weekTasks = tasks
-    if (weekTasks.length === 0) return null
-    const progMinutes = weekTasks.reduce((s, t) => s + t.target_quantity * (t.standard_time_minutes || 0), 0)
-    const hasAnyActual = weekTasks.some((t) => t.actual_quantity != null)
-    const realMinutes = weekTasks.reduce((s, t) => s + (t.actual_quantity != null ? t.actual_quantity * (t.standard_time_minutes || 0) : 0), 0)
+    const weekServices = allServiceTasks
+    if (weekTasks.length === 0 && weekServices.length === 0) return null
+
+    const taskProgMinutes = weekTasks.reduce((s, t) => s + t.target_quantity * (t.standard_time_minutes || 0), 0)
+    const hasAnyTaskActual = weekTasks.some((t) => t.actual_quantity != null)
+    const taskRealMinutes = weekTasks.reduce((s, t) => s + (t.actual_quantity != null ? t.actual_quantity * (t.standard_time_minutes || 0) : 0), 0)
+
+    const serviceProgMinutes = weekServices.reduce((s, sv) => s + Number(sv.hours_assigned || 0) * 60, 0)
+    const hasAnyServiceActual = weekServices.some((sv) => sv.completed)
+    const serviceRealMinutes = weekServices.reduce((s, sv) => s + (sv.completed ? Number(sv.hours_assigned || 0) * 60 : 0), 0)
+
+    const progMinutes = taskProgMinutes + serviceProgMinutes
+    const realMinutes = taskRealMinutes + serviceRealMinutes
+    const hasAnyActual = hasAnyTaskActual || hasAnyServiceActual
+
     if (!hasAnyActual || progMinutes === 0) return null
     return Math.round((realMinutes / progMinutes) * 1000) / 10
   }
