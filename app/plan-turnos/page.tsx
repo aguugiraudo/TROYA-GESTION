@@ -63,10 +63,12 @@ export default function PlanTurnosPage() {
   const [fServiceQty, setFServiceQty] = useState('')
   const [fServiceNotes, setFServiceNotes] = useState('')
 
-  // Servicios en Láser: se cargan de a varios (cliente + minutos) antes de asignar todos juntos
+  // Servicios en Láser: se cargan de a varios (cliente + minutos + cantidad objetivo) antes de asignar todos juntos
   const [laserServiceCliente, setLaserServiceCliente] = useState('')
   const [laserServiceMinutos, setLaserServiceMinutos] = useState('')
-  const [laserServiceEntries, setLaserServiceEntries] = useState<{ cliente: string; minutos: string }[]>([])
+  const [laserServiceCantidad, setLaserServiceCantidad] = useState('1')
+  const [laserServiceEntries, setLaserServiceEntries] = useState<{ cliente: string; minutos: string; cantidad: string }[]>([])
+  const [editingServiceTarget, setEditingServiceTarget] = useState<string | null>(null)
 
   // --- Desglose Láser: nidos disponibles para la OP/sector elegidos ---
   const [laserLoteInfo, setLaserLoteInfo] = useState<{
@@ -269,7 +271,7 @@ export default function PlanTurnosPage() {
     setFSector(''); setFOrder(''); setFComponent(''); setFQuantity('')
     setFServiceHours(''); setFServiceQty(''); setFServiceNotes('')
     setLaserLoteInfo(null); setSelectedNidoId('')
-    setLaserServiceEntries([]); setLaserServiceCliente(''); setLaserServiceMinutos('')
+    setLaserServiceEntries([]); setLaserServiceCliente(''); setLaserServiceMinutos(''); setLaserServiceCantidad('1')
   }
 
   function addLaserServiceEntry() {
@@ -277,16 +279,31 @@ export default function PlanTurnosPage() {
       alert('Completá cliente y minutos antes de agregar.')
       return
     }
-    setLaserServiceEntries((prev) => [...prev, { cliente: laserServiceCliente.trim(), minutos: laserServiceMinutos }])
-    setLaserServiceCliente(''); setLaserServiceMinutos('')
+    setLaserServiceEntries((prev) => [...prev, { cliente: laserServiceCliente.trim(), minutos: laserServiceMinutos, cantidad: laserServiceCantidad || '1' }])
+    setLaserServiceCliente(''); setLaserServiceMinutos(''); setLaserServiceCantidad('1')
   }
 
   function removeLaserServiceEntry(index: number) {
     setLaserServiceEntries((prev) => prev.filter((_, i) => i !== index))
   }
 
-  async function toggleServiceCompleted(s: any) {
-    await supabase.from('service_tasks').update({ completed: !s.completed }).eq('id', s.id)
+  async function saveServiceQuantity(s: any, value: string) {
+    const qty = Math.max(0, parseInt(value || '0', 10))
+    if (qty === s.quantity_services) { setEditingServiceTarget(null); return }
+    const { error } = await supabase.from('service_tasks').update({ quantity_services: qty }).eq('id', s.id)
+    if (error) { alert('Error al editar la cantidad: ' + error.message); return }
+    setEditingServiceTarget(null)
+    fetchTasksAndAvailability()
+  }
+
+  async function saveServiceActual(id: string, value: string) {
+    const parsed = value === '' ? null : Math.max(0, parseInt(value, 10))
+    await supabase.from('service_tasks').update({ actual_quantity: parsed }).eq('id', id)
+    fetchTasksAndAvailability()
+  }
+
+  async function saveServiceNotes(id: string, value: string) {
+    await supabase.from('service_tasks').update({ notes: value || null }).eq('id', id)
     fetchTasksAndAvailability()
   }
 
@@ -311,9 +328,9 @@ export default function PlanTurnosPage() {
         sector_id: fSector,
         category: 'servicio',
         hours_assigned: Math.round((parseFloat(e.minutos) / 60) * 1000) / 1000,
-        quantity_services: 1,
-        notes: e.cliente,
-        completed: false,
+        quantity_services: Math.max(1, parseInt(e.cantidad || '1', 10)),
+        cliente: e.cliente,
+        notes: null,
       }))
       const { error } = await supabase.from('service_tasks').insert(rows)
       if (error) { alert('Error al asignar los servicios: ' + error.message); return }
@@ -682,6 +699,8 @@ export default function PlanTurnosPage() {
 
             {isLaserService ? (
               <div className="flex gap-1 min-w-0">
+                <input placeholder="Cant." type="number" value={laserServiceCantidad} onChange={(e) => setLaserServiceCantidad(e.target.value)}
+                  className="border border-blue-300 rounded-md px-2 py-1.5 text-sm w-16 min-w-0" title="Cantidad (Objetivo)" />
                 <input placeholder="Minutos" type="number" value={laserServiceMinutos} onChange={(e) => setLaserServiceMinutos(e.target.value)}
                   className="border border-blue-300 rounded-md px-2 py-1.5 text-sm flex-1 min-w-0" />
                 <button onClick={addLaserServiceEntry} className="text-xs bg-blue-600 text-white px-3 rounded-md hover:bg-blue-700 shrink-0">
@@ -734,7 +753,7 @@ export default function PlanTurnosPage() {
             <div className="mb-3 space-y-1.5">
               {laserServiceEntries.map((e, i) => (
                 <div key={i} className="flex items-center justify-between gap-2 bg-blue-50 border border-blue-100 rounded-md px-3 py-1.5 text-sm">
-                  <span className="text-slate-700">{e.cliente} — <strong>{e.minutos} min</strong></span>
+                  <span className="text-slate-700">{e.cliente} — <strong>{e.cantidad}</strong> u. — <strong>{e.minutos} min</strong></span>
                   <button onClick={() => removeLaserServiceEntry(i)} className="text-xs text-rose-500 hover:underline">Quitar</button>
                 </div>
               ))}
@@ -900,23 +919,53 @@ export default function PlanTurnosPage() {
                             <td className="py-2">{s.sectors?.name}</td>
                             <td className="py-2 leading-tight">
                               <div className="text-xs text-slate-400">Servicio</div>
-                              <div className="text-slate-700">{s.notes || '—'}</div>
+                              <div className="text-slate-700">{s.cliente || '—'}</div>
                             </td>
-                            <td className="py-2 text-center font-medium text-slate-300">—</td>
+                            <td className="py-2 text-center font-medium">
+                              {canEdit && editingServiceTarget === s.id ? (
+                                <input
+                                  type="number"
+                                  defaultValue={s.quantity_services ?? 1}
+                                  autoFocus
+                                  min={0}
+                                  onBlur={(e) => saveServiceQuantity(s, e.target.value)}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                                  className="w-14 text-center rounded-md border border-blue-300 py-1"
+                                />
+                              ) : (
+                                <button
+                                  onClick={() => canEdit && setEditingServiceTarget(s.id)}
+                                  disabled={!canEdit}
+                                  className={canEdit ? 'hover:underline decoration-dotted' : ''}
+                                >
+                                  {s.quantity_services ?? 1}
+                                </button>
+                              )}
+                            </td>
                             <td className="py-2 text-center text-slate-600 font-medium whitespace-nowrap">
                               {formatHoursMinutes(Number(s.hours_assigned || 0))}
                             </td>
                             <td className="py-2 text-center">
                               <input
-                                type="checkbox"
-                                checked={!!s.completed}
-                                onChange={() => toggleServiceCompleted(s)}
+                                type="number"
+                                defaultValue={s.actual_quantity ?? ''}
+                                placeholder="—"
+                                onBlur={(e) => saveServiceActual(s.id, e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
                                 disabled={!canEdit}
-                                className="w-4 h-4 accent-emerald-600"
+                                className="w-14 text-center rounded-md border border-slate-300 py-1 disabled:bg-slate-50 disabled:text-slate-400"
                               />
                             </td>
                             <td className="py-2">
-                              <span className="text-slate-300 text-xs">—</span>
+                              <input
+                                type="text"
+                                defaultValue={s.notes ?? ''}
+                                placeholder="Obs."
+                                onBlur={(e) => saveServiceNotes(s.id, e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                                disabled={!canEdit}
+                                className="w-full rounded-md border border-slate-300 py-1 px-2 text-xs disabled:bg-slate-50 disabled:text-slate-400"
+                              />
                             </td>
                             <td className="py-2 text-right">
                               {canEdit && (
@@ -1029,16 +1078,34 @@ export default function PlanTurnosPage() {
                           <div className="flex items-start justify-between gap-2 mb-2">
                             <div className="min-w-0 flex-1">
                               <p className="text-xs text-slate-400">{s.sectors?.name}</p>
-                              <p className="text-sm font-medium text-slate-700 break-words">Servicio — {s.notes || '—'}</p>
+                              <p className="text-sm font-medium text-slate-700 break-words">Servicio — {s.cliente || '—'}</p>
                             </div>
                             {canEdit && (
                               <button onClick={() => deleteServiceTask(s.id)} className="text-xs text-rose-500 hover:underline shrink-0">Eliminar</button>
                             )}
                           </div>
-                          <div className="flex items-center gap-4">
+                          <div className="flex items-center gap-4 mb-2">
                             <div>
                               <p className="text-[10px] text-slate-400">Objetivo</p>
-                              <p className="text-sm font-semibold text-slate-300">—</p>
+                              {canEdit && editingServiceTarget === s.id ? (
+                                <input
+                                  type="number"
+                                  defaultValue={s.quantity_services ?? 1}
+                                  autoFocus
+                                  min={0}
+                                  onBlur={(e) => saveServiceQuantity(s, e.target.value)}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                                  className="w-14 text-center rounded-md border border-blue-300 py-1 text-sm"
+                                />
+                              ) : (
+                                <button
+                                  onClick={() => canEdit && setEditingServiceTarget(s.id)}
+                                  disabled={!canEdit}
+                                  className={`text-sm font-semibold text-slate-700 ${canEdit ? 'hover:underline decoration-dotted' : ''}`}
+                                >
+                                  {s.quantity_services ?? 1}
+                                </button>
+                              )}
                             </div>
                             <div>
                               <p className="text-[10px] text-slate-400">Tiempo</p>
@@ -1046,9 +1113,26 @@ export default function PlanTurnosPage() {
                             </div>
                             <div>
                               <p className="text-[10px] text-slate-400">Real</p>
-                              <input type="checkbox" checked={!!s.completed} onChange={() => toggleServiceCompleted(s)} disabled={!canEdit} className="w-4 h-4 accent-emerald-600 mt-1" />
+                              <input
+                                type="number"
+                                defaultValue={s.actual_quantity ?? ''}
+                                placeholder="—"
+                                onBlur={(e) => saveServiceActual(s.id, e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                                disabled={!canEdit}
+                                className="w-14 text-center rounded-md border border-slate-300 py-1 text-sm disabled:bg-slate-50 disabled:text-slate-400"
+                              />
                             </div>
                           </div>
+                          <input
+                            type="text"
+                            defaultValue={s.notes ?? ''}
+                            placeholder="Obs."
+                            onBlur={(e) => saveServiceNotes(s.id, e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                            disabled={!canEdit}
+                            className="w-full rounded-md border border-slate-300 py-1.5 px-2 text-xs min-w-0 disabled:bg-slate-50 disabled:text-slate-400"
+                          />
                         </div>
                       ))}
                     </div>

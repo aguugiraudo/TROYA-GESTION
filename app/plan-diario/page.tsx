@@ -213,10 +213,15 @@ export default function PlanDiarioPage() {
     const hasAnyTaskActual = dayTasks.some((t) => t.actual_quantity != null)
     const taskRealMinutes = dayTasks.reduce((sum, t) => sum + (t.actual_quantity != null ? t.actual_quantity * (t.standard_time_minutes || 0) : 0), 0)
 
-    // Servicios: el objetivo es cada servicio programado (sus minutos); el real son los ya marcados como completados
+    // Servicios: el objetivo es cada servicio programado (sus minutos); el real se prorratea según la cantidad ya cerrada
     const serviceProgMinutes = dayServices.reduce((sum, s) => sum + Number(s.hours_assigned || 0) * 60, 0)
-    const hasAnyServiceActual = dayServices.some((s) => s.completed)
-    const serviceRealMinutes = dayServices.reduce((sum, s) => sum + (s.completed ? Number(s.hours_assigned || 0) * 60 : 0), 0)
+    const hasAnyServiceActual = dayServices.some((s) => s.actual_quantity != null)
+    const serviceRealMinutes = dayServices.reduce((sum, s) => {
+      if (s.actual_quantity == null) return sum
+      const target = s.quantity_services ?? 1
+      const ratio = target > 0 ? s.actual_quantity / target : 0
+      return sum + Number(s.hours_assigned || 0) * 60 * ratio
+    }, 0)
 
     const progMinutes = taskProgMinutes + serviceProgMinutes
     const realMinutes = taskRealMinutes + serviceRealMinutes
@@ -234,10 +239,11 @@ export default function PlanDiarioPage() {
   function laserServiceDayResult(date: string) {
     const dayServices = laserServiceTasks.filter((s) => s.plan_date === date)
     if (dayServices.length === 0) return null
-    const obj = dayServices.length
-    const real = dayServices.filter((s) => s.completed).length
-    const cumplimiento = Math.round((real / obj) * 1000) / 10
-    return { obj, real, cumplimiento }
+    const obj = dayServices.reduce((s, sv) => s + (sv.quantity_services ?? 1), 0)
+    const hasAnyReal = dayServices.some((sv) => sv.actual_quantity != null)
+    const real = dayServices.reduce((s, sv) => s + (sv.actual_quantity ?? 0), 0)
+    const cumplimiento = hasAnyReal && obj > 0 ? Math.round((real / obj) * 1000) / 10 : null
+    return { obj, real: hasAnyReal ? real : null, cumplimiento }
   }
 
   function weekResult() {
@@ -250,8 +256,13 @@ export default function PlanDiarioPage() {
     const taskRealMinutes = weekTasks.reduce((s, t) => s + (t.actual_quantity != null ? t.actual_quantity * (t.standard_time_minutes || 0) : 0), 0)
 
     const serviceProgMinutes = weekServices.reduce((s, sv) => s + Number(sv.hours_assigned || 0) * 60, 0)
-    const hasAnyServiceActual = weekServices.some((sv) => sv.completed)
-    const serviceRealMinutes = weekServices.reduce((s, sv) => s + (sv.completed ? Number(sv.hours_assigned || 0) * 60 : 0), 0)
+    const hasAnyServiceActual = weekServices.some((sv) => sv.actual_quantity != null)
+    const serviceRealMinutes = weekServices.reduce((s, sv) => {
+      if (sv.actual_quantity == null) return s
+      const target = sv.quantity_services ?? 1
+      const ratio = target > 0 ? sv.actual_quantity / target : 0
+      return s + Number(sv.hours_assigned || 0) * 60 * ratio
+    }, 0)
 
     const progMinutes = taskProgMinutes + serviceProgMinutes
     const realMinutes = taskRealMinutes + serviceRealMinutes
@@ -387,16 +398,16 @@ export default function PlanDiarioPage() {
               </tr>
             </thead>
             <tbody>
-              <tr className="bg-slate-50 border-t-2 border-b-2 border-slate-200">
-                <td className="p-2 font-semibold text-slate-600 text-xs">Cumplimiento de planta</td>
+              <tr className="bg-slate-100 border-t-2 border-b-2 border-slate-300">
+                <td className="p-2 font-bold text-slate-800 text-sm">Cumplimiento de planta</td>
                 {dates.map((d) => {
                   const r = plantDayResult(d)
                   const isToday = d === todayISO
                   return (
-                    <td key={d} className={`p-0 border-l border-slate-200 ${isToday ? 'bg-slate-100' : ''}`}>
+                    <td key={d} className={`p-0 border-l border-slate-200 ${isToday ? 'bg-slate-200/60' : ''}`}>
                       <div className="grid grid-cols-3">
-                        <span className="text-center py-2 text-slate-500 text-xs">{r ? `${r.progHoras}h` : '—'}</span>
-                        <span className="text-center py-2 text-slate-500 text-xs">{r?.realHoras != null ? `${r.realHoras}h` : '—'}</span>
+                        <span className="text-center py-2 text-slate-600 text-xs font-medium">{r ? `${r.progHoras}h` : '—'}</span>
+                        <span className="text-center py-2 text-slate-600 text-xs font-medium">{r?.realHoras != null ? `${r.realHoras}h` : '—'}</span>
                         <span className={`text-center py-2 text-xs ${cumplimientoColor(r?.cumplimiento ?? null)}`}>
                           {r?.cumplimiento != null ? `${r.cumplimiento}%` : '—'}
                         </span>
@@ -406,18 +417,20 @@ export default function PlanDiarioPage() {
                 })}
               </tr>
 
-              <tr className="bg-blue-50/50 border-b-2 border-slate-200">
-                <td className="p-2 font-semibold text-blue-700 text-xs">Servicios en Láser</td>
+              <tr className="border-b border-slate-100">
+                <td className="p-2 leading-tight">
+                  <div className="text-slate-700 text-xs font-medium">Servicios en Láser</div>
+                </td>
                 {dates.map((d) => {
                   const r = laserServiceDayResult(d)
                   const isToday = d === todayISO
                   return (
-                    <td key={d} className={`p-0 border-l border-slate-200 ${isToday ? 'bg-blue-50' : ''}`}>
+                    <td key={d} className={`p-0 border-l ${isToday ? 'border-slate-100 bg-slate-50/60' : 'border-slate-100'}`}>
                       <div className="grid grid-cols-3">
-                        <span className="text-center py-2 text-slate-500 text-xs">{r ? r.obj : '—'}</span>
-                        <span className="text-center py-2 text-slate-500 text-xs">{r ? r.real : '—'}</span>
+                        <span className="text-center py-2 text-slate-600 text-xs">{r ? r.obj : '—'}</span>
+                        <span className="text-center py-2 text-slate-600 text-xs">{r?.real != null ? r.real : '—'}</span>
                         <span className={`text-center py-2 text-xs ${cumplimientoColor(r?.cumplimiento ?? null)}`}>
-                          {r ? `${r.cumplimiento}%` : '—'}
+                          {r?.cumplimiento != null ? `${r.cumplimiento}%` : '—'}
                         </span>
                       </div>
                     </td>
