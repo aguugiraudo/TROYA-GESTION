@@ -63,6 +63,11 @@ export default function PlanTurnosPage() {
   const [fServiceQty, setFServiceQty] = useState('')
   const [fServiceNotes, setFServiceNotes] = useState('')
 
+  // Servicios en Láser: se cargan de a varios (cliente + minutos) antes de asignar todos juntos
+  const [laserServiceCliente, setLaserServiceCliente] = useState('')
+  const [laserServiceMinutos, setLaserServiceMinutos] = useState('')
+  const [laserServiceEntries, setLaserServiceEntries] = useState<{ cliente: string; minutos: string }[]>([])
+
   // --- Desglose Láser: nidos disponibles para la OP/sector elegidos ---
   const [laserLoteInfo, setLaserLoteInfo] = useState<{
     loteId: string
@@ -201,6 +206,8 @@ export default function PlanTurnosPage() {
   const isFiveS = fOrder === FIVE_S_VALUE
   const isSpecial = isService || isFiveS
   const isLaserNidoFlow = !isSpecial && !!laserLoteInfo
+  const currentSectorObj = sectors.find((s) => s.id === fSector)
+  const isLaserService = isService && !!currentSectorObj && isLaserSectorName(currentSectorObj.name)
 
   const ordersForSector = fSector
     ? orders.filter((o) => progressRows.some((r) => r.order_id === o.id && r.sector_id === fSector && r.quantity_completed < r.quantity_required))
@@ -262,6 +269,25 @@ export default function PlanTurnosPage() {
     setFSector(''); setFOrder(''); setFComponent(''); setFQuantity('')
     setFServiceHours(''); setFServiceQty(''); setFServiceNotes('')
     setLaserLoteInfo(null); setSelectedNidoId('')
+    setLaserServiceEntries([]); setLaserServiceCliente(''); setLaserServiceMinutos('')
+  }
+
+  function addLaserServiceEntry() {
+    if (!laserServiceCliente.trim() || !laserServiceMinutos) {
+      alert('Completá cliente y minutos antes de agregar.')
+      return
+    }
+    setLaserServiceEntries((prev) => [...prev, { cliente: laserServiceCliente.trim(), minutos: laserServiceMinutos }])
+    setLaserServiceCliente(''); setLaserServiceMinutos('')
+  }
+
+  function removeLaserServiceEntry(index: number) {
+    setLaserServiceEntries((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  async function toggleServiceCompleted(s: any) {
+    await supabase.from('service_tasks').update({ completed: !s.completed }).eq('id', s.id)
+    fetchTasksAndAvailability()
   }
 
   async function handleAssign() {
@@ -274,7 +300,24 @@ export default function PlanTurnosPage() {
       return
     }
 
-    if (isService || isFiveS) {
+    if (isLaserService) {
+      if (laserServiceEntries.length === 0) {
+        alert('Agregá al menos un servicio (cliente + minutos) antes de asignar.')
+        return
+      }
+      const rows = laserServiceEntries.map((e) => ({
+        operator_id: fOperator,
+        plan_date: planDate,
+        sector_id: fSector,
+        category: 'servicio',
+        hours_assigned: Math.round((parseFloat(e.minutos) / 60) * 1000) / 1000,
+        quantity_services: 1,
+        notes: e.cliente,
+        completed: false,
+      }))
+      const { error } = await supabase.from('service_tasks').insert(rows)
+      if (error) { alert('Error al asignar los servicios: ' + error.message); return }
+    } else if (isService || isFiveS) {
       if (!fServiceHours) {
         alert(isFiveS ? 'Completá las horas dedicadas a 5S.' : 'Completá las horas dedicadas al servicio.')
         return
@@ -632,9 +675,20 @@ export default function PlanTurnosPage() {
                   </option>
                 ))}
               </select>
+            ) : isLaserService ? (
+              <input placeholder="Cliente" value={laserServiceCliente} onChange={(e) => setLaserServiceCliente(e.target.value)}
+                className="border border-blue-300 rounded-md px-2 py-1.5 text-sm w-full min-w-0" />
             ) : !isSpecial ? <div className="hidden md:block" /> : null}
 
-            {isSpecial ? (
+            {isLaserService ? (
+              <div className="flex gap-1 min-w-0">
+                <input placeholder="Minutos" type="number" value={laserServiceMinutos} onChange={(e) => setLaserServiceMinutos(e.target.value)}
+                  className="border border-blue-300 rounded-md px-2 py-1.5 text-sm flex-1 min-w-0" />
+                <button onClick={addLaserServiceEntry} className="text-xs bg-blue-600 text-white px-3 rounded-md hover:bg-blue-700 shrink-0">
+                  + Agregar
+                </button>
+              </div>
+            ) : isSpecial ? (
               <input placeholder="Horas dedicadas" type="number" step={0.5} value={fServiceHours}
                 onChange={(e) => setFServiceHours(e.target.value)}
                 className={`rounded-md px-2 py-1.5 text-sm w-full min-w-0 border ${isFiveS ? 'border-emerald-300' : 'border-blue-300'}`} />
@@ -665,7 +719,7 @@ export default function PlanTurnosPage() {
             )}
           </div>
 
-          {isSpecial && (
+          {isSpecial && !isLaserService && (
             <div className={`grid gap-3 mb-2 ${isService ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'}`}>
               {isService && (
                 <input placeholder="Cantidad de servicios (opcional)" type="number" value={fServiceQty}
@@ -673,6 +727,17 @@ export default function PlanTurnosPage() {
               )}
               <input placeholder="Obs. (opcional)" value={fServiceNotes} onChange={(e) => setFServiceNotes(e.target.value)}
                 className={`rounded-md px-2 py-1.5 text-sm w-full min-w-0 border ${isFiveS ? 'border-emerald-200' : 'border-blue-200'}`} />
+            </div>
+          )}
+
+          {isLaserService && laserServiceEntries.length > 0 && (
+            <div className="mb-3 space-y-1.5">
+              {laserServiceEntries.map((e, i) => (
+                <div key={i} className="flex items-center justify-between gap-2 bg-blue-50 border border-blue-100 rounded-md px-3 py-1.5 text-sm">
+                  <span className="text-slate-700">{e.cliente} — <strong>{e.minutos} min</strong></span>
+                  <button onClick={() => removeLaserServiceEntry(i)} className="text-xs text-rose-500 hover:underline">Quitar</button>
+                </div>
+              ))}
             </div>
           )}
 
@@ -700,9 +765,9 @@ export default function PlanTurnosPage() {
           )}
 
           <button onClick={handleAssign} className={`mt-2 w-full sm:w-auto text-white px-4 py-2 rounded-md text-sm font-medium ${
-            isService ? 'bg-blue-600 hover:bg-blue-700' : 'bg-emerald-600 hover:bg-emerald-700'
+            isService && !isLaserService ? 'bg-blue-600 hover:bg-blue-700' : 'bg-emerald-600 hover:bg-emerald-700'
           }`}>
-            {isService ? 'Asignar servicio' : isFiveS ? 'Asignar 5S' : isLaserNidoFlow ? 'Asignar nido' : 'Asignar tarea'}
+            {isLaserService ? `Asignar ${laserServiceEntries.length || ''} servicio(s)` : isService ? 'Asignar servicio' : isFiveS ? 'Asignar 5S' : isLaserNidoFlow ? 'Asignar nido' : 'Asignar tarea'}
           </button>
         </div>
       )}
@@ -939,13 +1004,20 @@ export default function PlanTurnosPage() {
                     <div className="flex flex-col gap-2">
                       {group.services.filter((s: any) => s.category !== '5s').map((s: any) => (
                         <div key={s.id} className="flex items-center justify-between gap-2 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
-                          <div className="min-w-0">
-                            <p className="text-sm text-slate-700">
-                              {s.sectors?.name} — <strong>{s.hours_assigned} hs</strong>
-                              {s.quantity_services != null && ` — ${s.quantity_services} servicios`}
-                            </p>
-                            {s.notes && <p className="text-xs text-slate-500 italic">"{s.notes}"</p>}
-                          </div>
+                          <label className="flex items-center gap-2 min-w-0 cursor-pointer">
+                            {canEdit ? (
+                              <input type="checkbox" checked={!!s.completed} onChange={() => toggleServiceCompleted(s)} className="shrink-0 w-4 h-4 accent-emerald-600" />
+                            ) : (
+                              <span className={`shrink-0 text-sm ${s.completed ? 'text-emerald-600' : 'text-slate-300'}`}>{s.completed ? '✓' : '○'}</span>
+                            )}
+                            <div className="min-w-0">
+                              <p className={`text-sm ${s.completed ? 'text-slate-400 line-through' : 'text-slate-700'}`}>
+                                {s.sectors?.name} — <strong>{s.hours_assigned} hs</strong>
+                                {s.quantity_services != null && ` — ${s.quantity_services} servicios`}
+                              </p>
+                              {s.notes && <p className={`text-xs italic ${s.completed ? 'text-slate-300' : 'text-slate-500'}`}>"{s.notes}"</p>}
+                            </div>
+                          </label>
                           {canEdit && (
                             <button onClick={() => deleteServiceTask(s.id)} className="text-xs text-rose-500 hover:underline shrink-0">Eliminar</button>
                           )}

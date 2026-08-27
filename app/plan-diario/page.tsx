@@ -9,6 +9,11 @@ const supabase = createClient(
 
 const DAY_NAMES = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes']
 
+function isLaserSectorName(name: string) {
+  const n = name.toLowerCase()
+  return n.includes('láser') || n.includes('laser')
+}
+
 function toISO(d: Date) {
   return d.toISOString().split('T')[0]
 }
@@ -48,6 +53,7 @@ export default function PlanDiarioPage() {
   const [weightByOrder, setWeightByOrder] = useState<Record<string, number>>({})
   const [progressDetailRows, setProgressDetailRows] = useState<any[]>([])
   const [tasks, setTasks] = useState<any[]>([])
+  const [laserServiceTasks, setLaserServiceTasks] = useState<any[]>([])
   const [allTasksByOrder, setAllTasksByOrder] = useState<Record<string, any[]>>({})
   const [loading, setLoading] = useState(true)
   const [orderDetailModal, setOrderDetailModal] = useState<{ order: any; date: string } | null>(null)
@@ -69,6 +75,16 @@ export default function PlanDiarioPage() {
       .gte('plan_date', weekdayDates[0])
       .lte('plan_date', satDate)
     setTasks(taskData || [])
+
+    // Servicios (no 5S) de la semana, para la fila de Servicios en Láser
+    const { data: serviceData } = await supabase
+      .from('service_tasks')
+      .select('*, sectors(name)')
+      .eq('category', 'servicio')
+      .gte('plan_date', weekdayDates[0])
+      .lte('plan_date', satDate)
+    const laserOnly = (serviceData || []).filter((s: any) => s.sectors?.name && isLaserSectorName(s.sectors.name))
+    setLaserServiceTasks(laserOnly)
 
     const { data: activeOrders } = await supabase
       .from('orders')
@@ -160,7 +176,6 @@ export default function PlanDiarioPage() {
     if (!maxTaskDate || date > maxTaskDate) return null
 
     // Si este día puntual no tiene NINGUNA tarea asignada para esta OP, no mostrar nada
-    // (antes se repetía el valor del día anterior, dando la falsa impresión de que había algo programado ese día)
     const todaysTasks = (allTasksByOrder[orderId] || []).filter((t) => t.plan_date === date)
     if (todaysTasks.length === 0) return null
 
@@ -171,12 +186,9 @@ export default function PlanDiarioPage() {
     const beforeToday = cumulativeRealUpTo(orderId, date, false)
     const allClosedToday = todaysTasks.every((t) => t.actual_quantity != null)
 
-    // Incremento de objetivo de HOY (solo lo programado para este día, en % del peso total)
     const todayTargetMin = todaysTasks.reduce((s, t) => s + t.target_quantity * (t.standard_time_minutes || 0), 0)
     const todayTargetPct = totalWeight ? (todayTargetMin / totalWeight) * 100 : 0
 
-    // El objetivo del día parte del REAL acumulado hasta ayer, no del objetivo teórico acumulado.
-    // Así "Obj." nunca arrastra el déficit (o exceso) de días anteriores.
     const baseRealPct = beforeToday.real ?? 0
     const progPct = Math.round((baseRealPct + todayTargetPct) * 10) / 10
 
@@ -204,6 +216,17 @@ export default function PlanDiarioPage() {
     return { progHoras, realHoras, cumplimiento }
   }
 
+  // Servicios en Láser del día: Obj. = cuántos se programaron (cada renglón cargado en Turnos y Operarios),
+  // Real = cuántos ya se marcaron como completados ahí mismo. Se muestra en cantidad de servicios, no en %.
+  function laserServiceDayResult(date: string) {
+    const dayServices = laserServiceTasks.filter((s) => s.plan_date === date)
+    if (dayServices.length === 0) return null
+    const obj = dayServices.length
+    const real = dayServices.filter((s) => s.completed).length
+    const cumplimiento = Math.round((real / obj) * 1000) / 10
+    return { obj, real, cumplimiento }
+  }
+
   function weekResult() {
     const weekTasks = tasks
     if (weekTasks.length === 0) return null
@@ -221,15 +244,11 @@ export default function PlanDiarioPage() {
     return 'text-rose-600 font-semibold'
   }
 
-  // Desglose por sector de una orden, tal como estaba a una fecha puntual:
-  // - realActual: lo que ya está hecho de verdad (real acumulado hasta esa fecha inclusive)
-  // - targetEndOfDay: a dónde tiene que llegar al FINAL de ese día (real de días anteriores + lo programado ese día)
-  // Esto viene directo de Turnos y Operarios: son los mismos target_quantity / actual_quantity que se cargan ahí.
+  // Desglose por sector de una orden, tal como estaba a una fecha puntual
   function sectorBreakdownFor(orderId: string, date: string) {
     const allRows = progressDetailRows.filter((r) => r.order_id === orderId)
     const orderTasks = allTasksByOrder[orderId] || []
 
-    // Agrupar los renglones de requerido por sector (puede haber varios por componente)
     const bySector: Record<string, { sectorId: string; sectorName: string; sequenceNo: number; requiredQty: number }> = {}
     allRows.forEach((r) => {
       const sector = sectors.find((s) => s.id === r.sector_id)
@@ -356,6 +375,25 @@ export default function PlanDiarioPage() {
                         <span className="text-center py-2 text-slate-500 text-xs">{r?.realHoras != null ? `${r.realHoras}h` : '—'}</span>
                         <span className={`text-center py-2 text-xs ${cumplimientoColor(r?.cumplimiento ?? null)}`}>
                           {r?.cumplimiento != null ? `${r.cumplimiento}%` : '—'}
+                        </span>
+                      </div>
+                    </td>
+                  )
+                })}
+              </tr>
+
+              <tr className="bg-blue-50/50 border-b-2 border-slate-200">
+                <td className="p-2 font-semibold text-blue-700 text-xs">Servicios en Láser</td>
+                {dates.map((d) => {
+                  const r = laserServiceDayResult(d)
+                  const isToday = d === todayISO
+                  return (
+                    <td key={d} className={`p-0 border-l border-slate-200 ${isToday ? 'bg-blue-50' : ''}`}>
+                      <div className="grid grid-cols-3">
+                        <span className="text-center py-2 text-slate-500 text-xs">{r ? r.obj : '—'}</span>
+                        <span className="text-center py-2 text-slate-500 text-xs">{r ? r.real : '—'}</span>
+                        <span className={`text-center py-2 text-xs ${cumplimientoColor(r?.cumplimiento ?? null)}`}>
+                          {r ? `${r.cumplimiento}%` : '—'}
                         </span>
                       </div>
                     </td>
