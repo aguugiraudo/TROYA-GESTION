@@ -42,7 +42,7 @@ export default function CatalogoProductosPage() {
   const [laserModalOpen, setLaserModalOpen] = useState(false)
   const [laserModalLoteId, setLaserModalLoteId] = useState<string | null>(null)
   const [laserModalQty, setLaserModalQty] = useState<number>(0)
-  const [laserEspesores, setLaserEspesores] = useState<{ id: string | null; espesor_mm: string; nidos: { id: string | null; minutos: string; cargaDescarga: string }[] }[]>([])
+  const [laserEspesores, setLaserEspesores] = useState<{ id: string | null; espesor_mm: string; material: string; nidos: { id: string | null; minutos: string; cargaDescarga: string }[] }[]>([])
   const [laserLoading, setLaserLoading] = useState(false)
 
   // Aviso de descuadre entre el tiempo unitario que da el desglose y el tiempo cargado en el Catálogo
@@ -124,7 +124,7 @@ export default function CatalogoProductosPage() {
 
     setLaserModalLoteId(null)
     setLaserModalQty(qty)
-    setLaserEspesores([{ id: null, espesor_mm: '', nidos: [{ id: null, minutos: '', cargaDescarga: '' }] }])
+    setLaserEspesores([{ id: null, espesor_mm: '', material: '', nidos: [{ id: null, minutos: '', cargaDescarga: '' }] }])
     setLaserModalOpen(true)
   }
 
@@ -143,15 +143,16 @@ export default function CatalogoProductosPage() {
       loaded.push({
         id: esp.id,
         espesor_mm: String(esp.espesor_mm),
+        material: esp.material || '',
         nidos: (nidos || []).map((n: any) => ({ id: n.id, minutos: String(n.standard_time_minutes), cargaDescarga: String(n.carga_descarga_minutes ?? 0) })),
       })
     }
-    setLaserEspesores(loaded.length > 0 ? loaded : [{ id: null, espesor_mm: '', nidos: [{ id: null, minutos: '', cargaDescarga: '' }] }])
+    setLaserEspesores(loaded.length > 0 ? loaded : [{ id: null, espesor_mm: '', material: '', nidos: [{ id: null, minutos: '', cargaDescarga: '' }] }])
     setLaserLoading(false)
   }
 
   function addEspesorRow() {
-    setLaserEspesores((prev) => [...prev, { id: null, espesor_mm: '', nidos: [{ id: null, minutos: '', cargaDescarga: '' }] }])
+    setLaserEspesores((prev) => [...prev, { id: null, espesor_mm: '', material: '', nidos: [{ id: null, minutos: '', cargaDescarga: '' }] }])
   }
 
   function removeEspesorRow(index: number) {
@@ -160,6 +161,10 @@ export default function CatalogoProductosPage() {
 
   function updateEspesorMm(index: number, value: string) {
     setLaserEspesores((prev) => prev.map((e, i) => (i === index ? { ...e, espesor_mm: value } : e)))
+  }
+
+  function updateEspesorMaterial(index: number, value: string) {
+    setLaserEspesores((prev) => prev.map((e, i) => (i === index ? { ...e, material: value } : e)))
   }
 
   function addNidoRow(espesorIndex: number) {
@@ -205,8 +210,9 @@ export default function CatalogoProductosPage() {
 
     let loteId = laserModalLoteId
     if (!loteId) {
+      // upsert: si por algún motivo ya existía un lote con este producto+cantidad, lo reusa en vez de fallar
       const { data, error } = await supabase.from('laser_lotes')
-        .insert({ product_id: selectedProduct.id, lote_qty: laserModalQty })
+        .upsert({ product_id: selectedProduct.id, lote_qty: laserModalQty }, { onConflict: 'product_id,lote_qty' })
         .select().single()
       if (error) { alert('Error al guardar el lote: ' + error.message); setLaserLoading(false); return }
       loteId = data.id
@@ -217,7 +223,7 @@ export default function CatalogoProductosPage() {
     for (const esp of laserEspesores) {
       if (!esp.espesor_mm) continue
       const { data: espData, error: espErr } = await supabase.from('laser_espesores')
-        .insert({ laser_lote_id: loteId, espesor_mm: parseFloat(esp.espesor_mm) })
+        .insert({ laser_lote_id: loteId, espesor_mm: parseFloat(esp.espesor_mm), material: esp.material.trim() || null })
         .select().single()
       if (espErr) continue
 
@@ -797,7 +803,7 @@ export default function CatalogoProductosPage() {
                 <div className="space-y-4">
                   {laserEspesores.map((esp, espIndex) => (
                     <div key={espIndex} className="border border-slate-200 rounded-lg p-3">
-                      <div className="flex items-center gap-2 mb-3">
+                      <div className="flex items-center gap-2 mb-3 flex-wrap">
                         <label className="text-xs text-slate-500 shrink-0">Espesor</label>
                         <input
                           type="number" step={0.1} placeholder="Ej: 3.2"
@@ -807,6 +813,13 @@ export default function CatalogoProductosPage() {
                           className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-24 disabled:bg-slate-50 disabled:text-slate-400"
                         />
                         <span className="text-xs text-slate-400">mm</span>
+                        <input
+                          type="text" placeholder="Detalle (opcional, ej: Inox)"
+                          value={esp.material}
+                          onChange={(e) => updateEspesorMaterial(espIndex, e.target.value)}
+                          disabled={!canEdit}
+                          className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-40 disabled:bg-slate-50 disabled:text-slate-400"
+                        />
                         {canEdit && (
                           <button onClick={() => removeEspesorRow(espIndex)} className="ml-auto text-xs text-rose-500 hover:underline">
                             Quitar espesor

@@ -73,7 +73,7 @@ export default function PlanTurnosPage() {
   // --- Desglose Láser: nidos disponibles para la OP/sector elegidos ---
   const [laserLoteInfo, setLaserLoteInfo] = useState<{
     loteId: string
-    nidos: { id: string; numero: number; espesorMm: number; corte: number; carga: number }[]
+    nidos: { id: string; numero: number; espesorMm: number; material: string | null; corte: number; carga: number }[]
     assignedNidoIds: Set<string>
   } | null>(null)
   const [selectedNidoId, setSelectedNidoId] = useState('')
@@ -107,7 +107,7 @@ export default function PlanTurnosPage() {
   async function fetchTasksAndAvailability() {
     const { data: taskData } = await supabase
       .from('operator_daily_tasks')
-      .select('*, operators(full_name), orders(order_number, products(name)), sectors(name), components(name), laser_nidos(numero, standard_time_minutes, carga_descarga_minutes, laser_espesores(espesor_mm))')
+      .select('*, operators(full_name), orders(order_number, products(name)), sectors(name), components(name), laser_nidos(numero, standard_time_minutes, carga_descarga_minutes, laser_espesores(espesor_mm, material))')
       .eq('plan_date', planDate)
       .order('created_at')
     setTasks(taskData || [])
@@ -158,6 +158,7 @@ export default function PlanTurnosPage() {
         const esp = (espesores || []).find((e: any) => e.id === n.laser_espesor_id)
         return {
           id: n.id, numero: n.numero, espesorMm: esp ? Number(esp.espesor_mm) : 0,
+          material: esp?.material || null,
           corte: Number(n.standard_time_minutes), carga: Number(n.carga_descarga_minutes || 0),
         }
       }).sort((a: any, b: any) => a.espesorMm - b.espesorMm || a.numero - b.numero)
@@ -546,7 +547,8 @@ export default function PlanTurnosPage() {
     if (!t.laser_nidos) return null
     const total = Number(t.laser_nidos.standard_time_minutes) + Number(t.laser_nidos.carga_descarga_minutes || 0)
     const esp = t.laser_nidos.laser_espesores?.espesor_mm
-    return `Nido ${t.laser_nidos.numero}${esp ? ` (${esp}mm)` : ''} — ${Math.round(total)} min`
+    const material = t.laser_nidos.laser_espesores?.material
+    return `Nido ${t.laser_nidos.numero}${esp ? ` (${esp}mm${material ? ` ${material}` : ''})` : ''} — ${Math.round(total)} min`
   }
 
   const ClockButton = ({ t }: { t: any }) => (
@@ -688,7 +690,7 @@ export default function PlanTurnosPage() {
                   <option value="" disabled>Sin nidos disponibles (todos ya asignados)</option>
                 ) : availableNidos.map((n) => (
                   <option key={n.id} value={n.id}>
-                    {n.espesorMm}mm — Nido {n.numero} ({Math.round(n.corte + n.carga)} min)
+                    {n.espesorMm}mm{n.material ? ` (${n.material})` : ''} — Nido {n.numero} ({Math.round(n.corte + n.carga)} min)
                   </option>
                 ))}
               </select>
