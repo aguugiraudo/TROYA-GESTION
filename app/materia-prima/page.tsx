@@ -10,6 +10,20 @@ const supabase = createClient(
 
 type Tab = 'stock' | 'calculadora' | 'composicion'
 
+function formatStock(baseQty: number, material: any) {
+  const pres = Number(material.presentacion || 1)
+  if (pres > 1) {
+    const enPresentacion = baseQty / pres
+    return `${Math.round(enPresentacion * 100) / 100} u. (${Math.round(baseQty * 100) / 100} ${material.unidad_medida})`
+  }
+  return `${Math.round(baseQty * 100) / 100} ${material.unidad_medida}`
+}
+
+function toggleSort(current: string, dir: 1 | -1, col: string, setBy: (v: any) => void, setDir: (v: 1 | -1) => void) {
+  if (current === col) setDir(dir === 1 ? -1 : 1)
+  else { setBy(col); setDir(1) }
+}
+
 export default function MateriaPrimaPage() {
   const { role } = useAuth()
   const canEdit = role === 'perfil_1'
@@ -28,6 +42,7 @@ export default function MateriaPrimaPage() {
   const [newMatName, setNewMatName] = useState('')
   const [newMatUnidad, setNewMatUnidad] = useState('u.')
   const [newMatStockMinimo, setNewMatStockMinimo] = useState('0')
+  const [newMatPresentacion, setNewMatPresentacion] = useState('1')
   const [addMatId, setAddMatId] = useState('')
   const [addMatQty, setAddMatQty] = useState('')
   const [addMatSector, setAddMatSector] = useState('')
@@ -37,6 +52,8 @@ export default function MateriaPrimaPage() {
   const [calcShowList, setCalcShowList] = useState(false)
   const [calcRows, setCalcRows] = useState<{ productId: string; productName: string; qty: string }[]>([])
   const [allProductMaterials, setAllProductMaterials] = useState<any[]>([])
+  const [stockSortBy, setStockSortBy] = useState<'codigo' | 'nombre' | 'proveedor_nombre' | 'stock' | 'stock_minimo'>('nombre')
+  const [stockSortDir, setStockSortDir] = useState<1 | -1>(1)
   const [calcGroupByProveedor, setCalcGroupByProveedor] = useState(true)
   const [calcSortBy, setCalcSortBy] = useState<'nombre' | 'codigo' | 'proveedor'>('proveedor')
 
@@ -59,7 +76,7 @@ export default function MateriaPrimaPage() {
     setMateriales(matData || [])
     const { data: sectorsData } = await supabase.from('sectors').select('*').order('sequence_no')
     setSectors(sectorsData || [])
-    const { data: pmData } = await supabase.from('producto_materiales').select('*, materiales(nombre, unidad_medida, codigo, proveedor_nombre), sectors(name)')
+    const { data: pmData } = await supabase.from('producto_materiales').select('*, materiales(nombre, unidad_medida, codigo, proveedor_nombre, presentacion), sectors(name)')
     setAllProductMaterials(pmData || [])
 
     const { data: stockData } = await supabase.from('material_stock').select('*')
@@ -94,12 +111,14 @@ export default function MateriaPrimaPage() {
 
   async function addMaterialGlobal() {
     if (!newMatName.trim()) return
+    const presentacion = parseFloat(newMatPresentacion || '1') || 1
+    const stockMinimoBase = parseFloat(newMatStockMinimo || '0') * presentacion
     const { error } = await supabase.from('materiales').insert({
       nombre: newMatName.trim(), unidad_medida: newMatUnidad.trim() || 'u.',
-      stock_minimo: parseFloat(newMatStockMinimo || '0'),
+      presentacion, stock_minimo: stockMinimoBase,
     })
     if (error) { alert('Error al crear el material: ' + error.message); return }
-    setNewMatName(''); setNewMatUnidad('u.'); setNewMatStockMinimo('0')
+    setNewMatName(''); setNewMatUnidad('u.'); setNewMatStockMinimo('0'); setNewMatPresentacion('1')
     setShowNewMaterial(false)
     fetchAll()
   }
@@ -114,10 +133,12 @@ export default function MateriaPrimaPage() {
 
   async function registrarIngresoMaterial() {
     if (!ingMaterial) { alert('Elegí un material.'); return }
-    const cantidad = parseFloat(ingCantidad || '0')
-    if (!cantidad || cantidad <= 0) { alert('Ingresá una cantidad válida.'); return }
+    const cantidadInput = parseFloat(ingCantidad || '0')
+    if (!cantidadInput || cantidadInput <= 0) { alert('Ingresá una cantidad válida.'); return }
+    const presentacion = Number(ingMaterial.presentacion || 1)
+    const cantidadBase = presentacion > 1 ? cantidadInput * presentacion : cantidadInput
     const { error } = await supabase.from('material_movimientos').insert({
-      material_id: ingMaterial.id, tipo: 'ingreso', cantidad, origen: 'manual', fecha: ingFecha, notes: ingNotes || null,
+      material_id: ingMaterial.id, tipo: 'ingreso', cantidad: cantidadBase, origen: 'manual', fecha: ingFecha, notes: ingNotes || null,
     })
     if (error) { alert('Error al registrar el ingreso: ' + error.message); return }
     resetIngresoForm()
@@ -190,7 +211,7 @@ export default function MateriaPrimaPage() {
   }
 
   // Total de materiales necesarios según las cantidades cargadas
-  const materialTotals: Record<string, { nombre: string; codigo: string; proveedor: string; unidad: string; total: number }> = {}
+  const materialTotals: Record<string, { nombre: string; codigo: string; proveedor: string; unidad: string; presentacion: number; total: number }> = {}
   calcRows.forEach((row) => {
     const qty = parseFloat(row.qty || '0')
     if (!qty) return
@@ -203,6 +224,7 @@ export default function MateriaPrimaPage() {
           codigo: pm.materiales?.codigo || '',
           proveedor: pm.materiales?.proveedor_nombre || 'Sin proveedor',
           unidad: pm.materiales?.unidad_medida || 'u.',
+          presentacion: Number(pm.materiales?.presentacion || 1),
           total: 0,
         }
       }
@@ -275,33 +297,54 @@ export default function MateriaPrimaPage() {
             <p className="text-slate-400 text-sm mb-8">Todavía no cargaste ningún material.</p>
           ) : (
             <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm bg-white mb-8">
-              <table className="w-full text-sm border-collapse">
+              <table className="w-full text-xs border-collapse">
                 <thead>
                   <tr className="bg-slate-900 text-white text-left">
-                    <th className="p-3 font-medium">Código</th>
-                    <th className="p-3 font-medium">Material</th>
-                    <th className="p-3 font-medium">Proveedor</th>
-                    <th className="p-3 font-medium text-center">Stock actual</th>
-                    <th className="p-3 font-medium text-center">Stock mínimo</th>
-                    <th className="p-3 font-medium text-center">Estado</th>
+                    {([
+                      ['codigo', 'Código'],
+                      ['nombre', 'Material'],
+                      ['proveedor_nombre', 'Proveedor'],
+                    ] as [string, string][]).map(([key, label]) => (
+                      <th key={key} onClick={() => toggleSort(stockSortBy, stockSortDir, key, setStockSortBy, setStockSortDir)}
+                        className="p-1.5 font-medium cursor-pointer select-none hover:bg-slate-800 whitespace-nowrap">
+                        {label} {stockSortBy === key ? (stockSortDir === 1 ? '▲' : '▼') : ''}
+                      </th>
+                    ))}
+                    <th onClick={() => toggleSort(stockSortBy, stockSortDir, 'stock', setStockSortBy, setStockSortDir)}
+                      className="p-1.5 font-medium text-center cursor-pointer select-none hover:bg-slate-800 whitespace-nowrap">
+                      Stock actual {stockSortBy === 'stock' ? (stockSortDir === 1 ? '▲' : '▼') : ''}
+                    </th>
+                    <th onClick={() => toggleSort(stockSortBy, stockSortDir, 'stock_minimo', setStockSortBy, setStockSortDir)}
+                      className="p-1.5 font-medium text-center cursor-pointer select-none hover:bg-slate-800 whitespace-nowrap">
+                      Stock mínimo {stockSortBy === 'stock_minimo' ? (stockSortDir === 1 ? '▲' : '▼') : ''}
+                    </th>
+                    <th className="p-1.5 font-medium text-center">Estado</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {materiales.map((m) => {
+                  {[...materiales].sort((a, b) => {
+                    let av: any, bv: any
+                    if (stockSortBy === 'stock') { av = stockByMaterial[a.id] || 0; bv = stockByMaterial[b.id] || 0 }
+                    else if (stockSortBy === 'stock_minimo') { av = a.stock_minimo; bv = b.stock_minimo }
+                    else { av = (a[stockSortBy] || '').toString().toLowerCase(); bv = (b[stockSortBy] || '').toString().toLowerCase() }
+                    if (av < bv) return -1 * stockSortDir
+                    if (av > bv) return 1 * stockSortDir
+                    return 0
+                  }).map((m) => {
                     const stock = stockByMaterial[m.id] || 0
                     const bajo = stock < m.stock_minimo
                     return (
                       <tr key={m.id} className="border-t border-slate-100">
-                        <td className="p-3 text-slate-400 text-xs">{m.codigo || '—'}</td>
-                        <td className="p-3 text-slate-700 font-medium">{m.nombre}</td>
-                        <td className="p-3 text-slate-500 text-xs">{m.proveedor_nombre || '—'}</td>
-                        <td className="p-3 text-center text-slate-600">{Math.round(stock * 100) / 100} {m.unidad_medida}</td>
-                        <td className="p-3 text-center text-slate-400">{m.stock_minimo} {m.unidad_medida}</td>
-                        <td className="p-3 text-center">
-                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                        <td className="p-1.5 text-slate-400">{m.codigo || '—'}</td>
+                        <td className="p-1.5 text-slate-700 font-medium">{m.nombre}</td>
+                        <td className="p-1.5 text-slate-500">{m.proveedor_nombre || '—'}</td>
+                        <td className="p-1.5 text-center text-slate-600 whitespace-nowrap">{formatStock(stock, m)}</td>
+                        <td className="p-1.5 text-center text-slate-400 whitespace-nowrap">{formatStock(m.stock_minimo, m)}</td>
+                        <td className="p-1.5 text-center">
+                          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
                             bajo ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'
                           }`}>
-                            {bajo ? '⚠ Stock bajo' : 'OK'}
+                            {bajo ? '⚠ Bajo' : 'OK'}
                           </span>
                         </td>
                       </tr>
@@ -336,7 +379,11 @@ export default function MateriaPrimaPage() {
                   )}
                 </div>
                 <div>
-                  <label className="text-xs text-slate-500">Cantidad {ingMaterial ? `(${ingMaterial.unidad_medida})` : ''}</label>
+                  <label className="text-xs text-slate-500">
+                    Cantidad {ingMaterial ? (Number(ingMaterial.presentacion || 1) > 1
+                      ? `(en unidades de presentación — 1 = ${ingMaterial.presentacion} ${ingMaterial.unidad_medida})`
+                      : `(${ingMaterial.unidad_medida})`) : ''}
+                  </label>
                   <input type="number" value={ingCantidad} onChange={(e) => setIngCantidad(e.target.value)}
                     className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1" />
                 </div>
@@ -492,7 +539,8 @@ export default function MateriaPrimaPage() {
                       <tr className="text-left text-slate-400 text-xs">
                         <th className="p-3 font-medium">Código</th>
                         <th className="p-3 font-medium">Material</th>
-                        <th className="p-3 font-medium text-right">Cantidad necesaria</th>
+                        <th className="p-3 font-medium text-right">Necesario</th>
+                        <th className="p-3 font-medium text-right">A comprar</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -500,7 +548,10 @@ export default function MateriaPrimaPage() {
                         <tr key={m.nombre + m.codigo} className="border-t border-slate-100">
                           <td className="p-3 text-slate-400 text-xs">{m.codigo || '—'}</td>
                           <td className="p-3 text-slate-700 font-medium">{m.nombre}</td>
-                          <td className="p-3 text-right text-slate-700">{Math.round(m.total * 100) / 100} {m.unidad}</td>
+                          <td className="p-3 text-right text-slate-500">{Math.round(m.total * 100) / 100} {m.unidad}</td>
+                          <td className="p-3 text-right text-slate-700 font-semibold">
+                            {m.presentacion > 1 ? `${Math.ceil(m.total / m.presentacion)} u.` : '—'}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -516,7 +567,8 @@ export default function MateriaPrimaPage() {
                     <th className="p-3 font-medium">Código</th>
                     <th className="p-3 font-medium">Material</th>
                     <th className="p-3 font-medium">Proveedor</th>
-                    <th className="p-3 font-medium text-right">Cantidad necesaria</th>
+                    <th className="p-3 font-medium text-right">Necesario</th>
+                    <th className="p-3 font-medium text-right">A comprar</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -525,7 +577,10 @@ export default function MateriaPrimaPage() {
                       <td className="p-3 text-slate-400 text-xs">{m.codigo || '—'}</td>
                       <td className="p-3 text-slate-700 font-medium">{m.nombre}</td>
                       <td className="p-3 text-slate-500 text-xs">{m.proveedor}</td>
-                      <td className="p-3 text-right text-slate-700">{Math.round(m.total * 100) / 100} {m.unidad}</td>
+                      <td className="p-3 text-right text-slate-500">{Math.round(m.total * 100) / 100} {m.unidad}</td>
+                      <td className="p-3 text-right text-slate-700 font-semibold">
+                        {m.presentacion > 1 ? `${Math.ceil(m.total / m.presentacion)} u.` : '—'}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -651,14 +706,19 @@ export default function MateriaPrimaPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs text-slate-500">Unidad</label>
-                  <input placeholder="kg, m, u." value={newMatUnidad} onChange={(e) => setNewMatUnidad(e.target.value)}
+                  <input placeholder="kg, m2, mm, u." value={newMatUnidad} onChange={(e) => setNewMatUnidad(e.target.value)}
                     className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full" />
                 </div>
                 <div>
-                  <label className="text-xs text-slate-500">Stock mínimo</label>
-                  <input type="number" value={newMatStockMinimo} onChange={(e) => setNewMatStockMinimo(e.target.value)}
+                  <label className="text-xs text-slate-500">Presentación (ej: chapa=4.5 m2)</label>
+                  <input type="number" value={newMatPresentacion} onChange={(e) => setNewMatPresentacion(e.target.value)}
                     className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full" />
                 </div>
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">Stock mínimo (en unidades de presentación, ej: chapas)</label>
+                <input type="number" value={newMatStockMinimo} onChange={(e) => setNewMatStockMinimo(e.target.value)}
+                  className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full" />
               </div>
             </div>
             <div className="flex gap-2 mt-5">
