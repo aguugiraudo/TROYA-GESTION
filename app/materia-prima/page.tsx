@@ -8,13 +8,13 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-type Tab = 'composicion' | 'calculadora'
+type Tab = 'stock' | 'calculadora' | 'composicion'
 
 export default function MateriaPrimaPage() {
   const { role } = useAuth()
   const canEdit = role === 'perfil_1'
 
-  const [tab, setTab] = useState<Tab>('calculadora')
+  const [tab, setTab] = useState<Tab>('stock')
 
   const [products, setProducts] = useState<any[]>([])
   const [materiales, setMateriales] = useState<any[]>([])
@@ -27,6 +27,7 @@ export default function MateriaPrimaPage() {
   const [productMaterials, setProductMaterials] = useState<any[]>([])
   const [newMatName, setNewMatName] = useState('')
   const [newMatUnidad, setNewMatUnidad] = useState('u.')
+  const [newMatStockMinimo, setNewMatStockMinimo] = useState('0')
   const [addMatId, setAddMatId] = useState('')
   const [addMatQty, setAddMatQty] = useState('')
   const [addMatSector, setAddMatSector] = useState('')
@@ -36,6 +37,17 @@ export default function MateriaPrimaPage() {
   const [calcShowList, setCalcShowList] = useState(false)
   const [calcRows, setCalcRows] = useState<{ productId: string; productName: string; qty: string }[]>([])
   const [allProductMaterials, setAllProductMaterials] = useState<any[]>([])
+
+  // --- Stock ---
+  const [stockByMaterial, setStockByMaterial] = useState<Record<string, number>>({})
+  const [movimientos, setMovimientos] = useState<any[]>([])
+  const [showNewMaterial, setShowNewMaterial] = useState(false)
+  const [ingSearch, setIngSearch] = useState('')
+  const [ingShowList, setIngShowList] = useState(false)
+  const [ingMaterial, setIngMaterial] = useState<any | null>(null)
+  const [ingCantidad, setIngCantidad] = useState('')
+  const [ingFecha, setIngFecha] = useState(new Date().toISOString().split('T')[0])
+  const [ingNotes, setIngNotes] = useState('')
 
   async function fetchAll() {
     setLoading(true)
@@ -47,6 +59,20 @@ export default function MateriaPrimaPage() {
     setSectors(sectorsData || [])
     const { data: pmData } = await supabase.from('producto_materiales').select('*, materiales(nombre, unidad_medida), sectors(name)')
     setAllProductMaterials(pmData || [])
+
+    const { data: stockData } = await supabase.from('material_stock').select('*')
+    const stockMap: Record<string, number> = {}
+    ;(stockData || []).forEach((r: any) => { stockMap[r.material_id] = Number(r.stock_actual) })
+    setStockByMaterial(stockMap)
+
+    const { data: movData } = await supabase
+      .from('material_movimientos')
+      .select('*, materiales(nombre, unidad_medida)')
+      .order('fecha', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(40)
+    setMovimientos(movData || [])
+
     setLoading(false)
   }
 
@@ -66,9 +92,39 @@ export default function MateriaPrimaPage() {
 
   async function addMaterialGlobal() {
     if (!newMatName.trim()) return
-    const { error } = await supabase.from('materiales').insert({ nombre: newMatName.trim(), unidad_medida: newMatUnidad.trim() || 'u.' })
+    const { error } = await supabase.from('materiales').insert({
+      nombre: newMatName.trim(), unidad_medida: newMatUnidad.trim() || 'u.',
+      stock_minimo: parseFloat(newMatStockMinimo || '0'),
+    })
     if (error) { alert('Error al crear el material: ' + error.message); return }
-    setNewMatName(''); setNewMatUnidad('u.')
+    setNewMatName(''); setNewMatUnidad('u.'); setNewMatStockMinimo('0')
+    setShowNewMaterial(false)
+    fetchAll()
+  }
+
+  function pickIngMaterial(m: any) {
+    setIngMaterial(m); setIngSearch(m.nombre); setIngShowList(false)
+  }
+
+  function resetIngresoForm() {
+    setIngSearch(''); setIngMaterial(null); setIngCantidad(''); setIngFecha(new Date().toISOString().split('T')[0]); setIngNotes('')
+  }
+
+  async function registrarIngresoMaterial() {
+    if (!ingMaterial) { alert('Elegí un material.'); return }
+    const cantidad = parseFloat(ingCantidad || '0')
+    if (!cantidad || cantidad <= 0) { alert('Ingresá una cantidad válida.'); return }
+    const { error } = await supabase.from('material_movimientos').insert({
+      material_id: ingMaterial.id, tipo: 'ingreso', cantidad, origen: 'manual', fecha: ingFecha, notes: ingNotes || null,
+    })
+    if (error) { alert('Error al registrar el ingreso: ' + error.message); return }
+    resetIngresoForm()
+    fetchAll()
+  }
+
+  async function deleteMovimiento(id: string) {
+    if (!confirm('¿Eliminar este movimiento? El stock se recalcula solo.')) return
+    await supabase.from('material_movimientos').delete().eq('id', id)
     fetchAll()
   }
 
@@ -162,6 +218,7 @@ export default function MateriaPrimaPage() {
 
       <div className="flex gap-1 border-b border-slate-200 mb-6">
         {([
+          ['stock', 'Stock'],
           ['calculadora', 'Calculadora de compras'],
           ['composicion', 'Composición por producto'],
         ] as [Tab, string][]).map(([key, label]) => (
@@ -176,6 +233,151 @@ export default function MateriaPrimaPage() {
           </button>
         ))}
       </div>
+
+      {/* ===================== STOCK ===================== */}
+      {tab === 'stock' && (
+        <>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-semibold text-slate-700">Materiales</h2>
+            {canEdit && (
+              <button onClick={() => setShowNewMaterial(true)} className="text-xs bg-slate-700 text-white px-3 py-1.5 rounded-md hover:bg-slate-800">
+                + Nuevo material
+              </button>
+            )}
+          </div>
+
+          {materiales.length === 0 ? (
+            <p className="text-slate-400 text-sm mb-8">Todavía no cargaste ningún material.</p>
+          ) : (
+            <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm bg-white mb-8">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="bg-slate-900 text-white text-left">
+                    <th className="p-3 font-medium">Material</th>
+                    <th className="p-3 font-medium text-center">Stock actual</th>
+                    <th className="p-3 font-medium text-center">Stock mínimo</th>
+                    <th className="p-3 font-medium text-center">Estado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {materiales.map((m) => {
+                    const stock = stockByMaterial[m.id] || 0
+                    const bajo = stock < m.stock_minimo
+                    return (
+                      <tr key={m.id} className="border-t border-slate-100">
+                        <td className="p-3 text-slate-700 font-medium">{m.nombre}</td>
+                        <td className="p-3 text-center text-slate-600">{Math.round(stock * 100) / 100} {m.unidad_medida}</td>
+                        <td className="p-3 text-center text-slate-400">{m.stock_minimo} {m.unidad_medida}</td>
+                        <td className="p-3 text-center">
+                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                            bajo ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'
+                          }`}>
+                            {bajo ? '⚠ Stock bajo' : 'OK'}
+                          </span>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {canEdit && (
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 md:p-5 mb-6">
+              <h2 className="font-semibold text-slate-700 mb-3">Registrar ingreso (compra)</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+                <div className="relative min-w-0">
+                  <label className="text-xs text-slate-500">Material</label>
+                  <input
+                    placeholder="Buscar material..."
+                    value={ingSearch}
+                    onChange={(e) => { setIngSearch(e.target.value); setIngMaterial(null); setIngShowList(true) }}
+                    onFocus={() => setIngShowList(true)}
+                    className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1"
+                  />
+                  {ingShowList && !ingMaterial && ingSearch.length > 0 && (
+                    <div className="absolute z-20 top-full mt-1 w-full max-h-52 overflow-y-auto bg-white border border-slate-200 rounded-md shadow-lg">
+                      {materiales.filter((m) => m.nombre.toLowerCase().includes(ingSearch.toLowerCase())).map((m) => (
+                        <div key={m.id} onClick={() => pickIngMaterial(m)} className="px-3 py-1.5 text-sm hover:bg-slate-100 cursor-pointer">
+                          {m.nombre} ({m.unidad_medida})
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500">Cantidad {ingMaterial ? `(${ingMaterial.unidad_medida})` : ''}</label>
+                  <input type="number" value={ingCantidad} onChange={(e) => setIngCantidad(e.target.value)}
+                    className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1" />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="text-xs text-slate-500">Fecha</label>
+                  <input type="date" value={ingFecha} onChange={(e) => setIngFecha(e.target.value)}
+                    className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1" />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500">Notas (opcional)</label>
+                  <input placeholder="Ej: compra proveedor X" value={ingNotes} onChange={(e) => setIngNotes(e.target.value)}
+                    className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1" />
+                </div>
+              </div>
+              <button onClick={registrarIngresoMaterial} className="bg-emerald-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-emerald-700">
+                Registrar ingreso
+              </button>
+            </div>
+          )}
+
+          <h2 className="font-semibold text-slate-700 mb-3">Últimos movimientos</h2>
+          {movimientos.length === 0 ? (
+            <p className="text-slate-400 text-sm">Todavía no hay movimientos registrados.</p>
+          ) : (
+            <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm bg-white">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="bg-slate-900 text-white text-left">
+                    <th className="p-3 font-medium">Fecha</th>
+                    <th className="p-3 font-medium">Material</th>
+                    <th className="p-3 font-medium text-center">Tipo</th>
+                    <th className="p-3 font-medium text-center">Cantidad</th>
+                    <th className="p-3 font-medium">Origen</th>
+                    <th className="p-3 font-medium"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {movimientos.map((m: any) => (
+                    <tr key={m.id} className="border-t border-slate-100">
+                      <td className="p-3 text-slate-500">{m.fecha.split('-').reverse().join('/')}</td>
+                      <td className="p-3 text-slate-700">{m.materiales?.nombre}</td>
+                      <td className="p-3 text-center">
+                        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                          m.tipo === 'ingreso' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
+                        }`}>
+                          {m.tipo === 'ingreso' ? 'Ingreso' : 'Egreso'}
+                        </span>
+                      </td>
+                      <td className="p-3 text-center font-medium text-slate-700">
+                        {m.tipo === 'ingreso' ? '+' : '-'}{Math.round(m.cantidad * 100) / 100} {m.materiales?.unidad_medida}
+                      </td>
+                      <td className="p-3 text-slate-500 text-xs">
+                        {m.origen === 'consumo_automatico' ? '🤖 Automático (producción)' : m.origen === 'ajuste_inventario' ? '📋 Ajuste inventario' : '✍️ Manual'}
+                        {m.notes && <span className="italic"> — "{m.notes}"</span>}
+                      </td>
+                      <td className="p-3 text-right">
+                        {canEdit && m.origen === 'manual' && (
+                          <button onClick={() => deleteMovimiento(m.id)} className="text-xs text-rose-500 hover:underline">Eliminar</button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
 
       {/* ===================== CALCULADORA ===================== */}
       {tab === 'calculadora' && (
@@ -264,26 +466,6 @@ export default function MateriaPrimaPage() {
       {/* ===================== COMPOSICIÓN ===================== */}
       {tab === 'composicion' && (
         <>
-          {canEdit && (
-            <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 mb-6">
-              <h2 className="font-semibold text-slate-700 text-sm mb-2">Materiales (catálogo general)</h2>
-              <div className="flex flex-wrap items-center gap-2 mb-3">
-                {materiales.map((m) => (
-                  <span key={m.id} className="text-xs bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full">{m.nombre} ({m.unidad_medida})</span>
-                ))}
-              </div>
-              <div className="flex gap-2">
-                <input placeholder="Nombre del material" value={newMatName} onChange={(e) => setNewMatName(e.target.value)}
-                  className="border border-slate-300 rounded-md px-2 py-1.5 text-sm flex-1 min-w-0" />
-                <input placeholder="Unidad (kg, m, u.)" value={newMatUnidad} onChange={(e) => setNewMatUnidad(e.target.value)}
-                  className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-32" />
-                <button onClick={addMaterialGlobal} className="text-xs bg-slate-700 text-white px-3 rounded-md hover:bg-slate-800 shrink-0">
-                  + Agregar
-                </button>
-              </div>
-            </div>
-          )}
-
           {!selectedProduct ? (
             <>
               <input
@@ -382,6 +564,41 @@ export default function MateriaPrimaPage() {
             </div>
           )}
         </>
+      )}
+
+      {showNewMaterial && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setShowNewMaterial(false)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-semibold text-slate-800 mb-4">Nuevo material</h3>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-500">Nombre</label>
+                <input value={newMatName} onChange={(e) => setNewMatName(e.target.value)}
+                  className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-slate-500">Unidad</label>
+                  <input placeholder="kg, m, u." value={newMatUnidad} onChange={(e) => setNewMatUnidad(e.target.value)}
+                    className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full" />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500">Stock mínimo</label>
+                  <input type="number" value={newMatStockMinimo} onChange={(e) => setNewMatStockMinimo(e.target.value)}
+                    className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full" />
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-2 mt-5">
+              <button onClick={() => setShowNewMaterial(false)} className="flex-1 border border-slate-300 rounded-md py-2 text-sm text-slate-600 hover:bg-slate-50">
+                Cancelar
+              </button>
+              <button onClick={addMaterialGlobal} className="flex-1 bg-blue-600 text-white rounded-md py-2 text-sm font-medium hover:bg-blue-700">
+                Crear
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </main>
   )

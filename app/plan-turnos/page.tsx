@@ -407,8 +407,39 @@ export default function PlanTurnosPage() {
 
   async function saveActual(taskId: string, value: string) {
     const parsed = value === '' ? null : Math.max(0, parseInt(value, 10))
+    const task = tasks.find((t) => t.id === taskId)
+    const prevActual = task ? task.actual_quantity : null
+
     await supabase.from('operator_daily_tasks').update({ actual_quantity: parsed }).eq('id', taskId)
+
+    if (task) await applyMaterialConsumption(task, prevActual, parsed)
+
     fetchTasksAndAvailability(); fetchStatic()
+  }
+
+  // Descuenta materia prima automáticamente al cerrar el Real de una tarea: solo los materiales cuyo
+  // sector de consumo coincide con el sector de ESTA tarea puntual, y solo la diferencia (delta) contra
+  // el Real anterior — así editar el Real más de una vez nunca duplica el descuento.
+  async function applyMaterialConsumption(task: any, prevActual: number | null, newActual: number | null) {
+    const delta = (newActual ?? 0) - (prevActual ?? 0)
+    if (delta === 0) return
+
+    const { data: orderRow } = await supabase.from('orders').select('product_id').eq('id', task.order_id).single()
+    if (!orderRow) return
+
+    const { data: mats } = await supabase
+      .from('producto_materiales').select('*').eq('product_id', orderRow.product_id).eq('sector_id', task.sector_id)
+    if (!mats || mats.length === 0) return
+
+    const rows = mats.map((m: any) => ({
+      material_id: m.material_id,
+      tipo: delta > 0 ? 'egreso' : 'ingreso',
+      cantidad: Math.abs(delta) * m.cantidad_por_unidad,
+      origen: 'consumo_automatico',
+      order_id: task.order_id,
+      task_id: task.id,
+    }))
+    await supabase.from('material_movimientos').insert(rows)
   }
 
   async function saveNotes(taskId: string, value: string) {
