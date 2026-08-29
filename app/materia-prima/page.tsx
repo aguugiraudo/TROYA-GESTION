@@ -8,7 +8,7 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-type Tab = 'stock' | 'calculadora' | 'composicion'
+type Tab = 'stock' | 'inventario' | 'calculadora' | 'composicion'
 
 function formatStock(baseQty: number, material: any) {
   const pres = Number(material.presentacion || 1)
@@ -43,6 +43,7 @@ export default function MateriaPrimaPage() {
   const [newMatUnidad, setNewMatUnidad] = useState('u.')
   const [newMatStockMinimo, setNewMatStockMinimo] = useState('0')
   const [newMatPresentacion, setNewMatPresentacion] = useState('1')
+  const [newMatUbicacion, setNewMatUbicacion] = useState('')
   const [addMatId, setAddMatId] = useState('')
   const [addMatQty, setAddMatQty] = useState('')
   const [addMatSector, setAddMatSector] = useState('')
@@ -61,6 +62,13 @@ export default function MateriaPrimaPage() {
   const [stockByMaterial, setStockByMaterial] = useState<Record<string, number>>({})
   const [movimientos, setMovimientos] = useState<any[]>([])
   const [showNewMaterial, setShowNewMaterial] = useState(false)
+  const [editingPresentacion, setEditingPresentacion] = useState<string | null>(null)
+  const [editingUbicacion, setEditingUbicacion] = useState<string | null>(null)
+
+  // --- Inventario físico ---
+  const [invUbicacionFilter, setInvUbicacionFilter] = useState('')
+  const [invCounts, setInvCounts] = useState<Record<string, string>>({})
+  const [invSavedDiffs, setInvSavedDiffs] = useState<Record<string, number>>({})
   const [ingSearch, setIngSearch] = useState('')
   const [ingShowList, setIngShowList] = useState(false)
   const [ingMaterial, setIngMaterial] = useState<any | null>(null)
@@ -115,10 +123,10 @@ export default function MateriaPrimaPage() {
     const stockMinimoBase = parseFloat(newMatStockMinimo || '0') * presentacion
     const { error } = await supabase.from('materiales').insert({
       nombre: newMatName.trim(), unidad_medida: newMatUnidad.trim() || 'u.',
-      presentacion, stock_minimo: stockMinimoBase,
+      presentacion, stock_minimo: stockMinimoBase, ubicacion: newMatUbicacion.trim() || null,
     })
     if (error) { alert('Error al crear el material: ' + error.message); return }
-    setNewMatName(''); setNewMatUnidad('u.'); setNewMatStockMinimo('0'); setNewMatPresentacion('1')
+    setNewMatName(''); setNewMatUnidad('u.'); setNewMatStockMinimo('0'); setNewMatPresentacion('1'); setNewMatUbicacion('')
     setShowNewMaterial(false)
     fetchAll()
   }
@@ -173,6 +181,109 @@ export default function MateriaPrimaPage() {
     await supabase.from('producto_materiales').update({ sector_id: sectorId || null }).eq('id', id)
     if (selectedProduct) fetchProductMaterials(selectedProduct.id)
     fetchAll()
+  }
+
+  async function saveMaterialPresentacion(m: any, newPresentacionValue: string) {
+    const nuevaPresentacion = parseFloat(newPresentacionValue || '1') || 1
+    const presentacionAnterior = Number(m.presentacion || 1)
+    // Recalculamos el stock mínimo para que la cantidad de "chapas" mínimas configuradas no cambie
+    const stockMinimoEnChapas = presentacionAnterior > 0 ? m.stock_minimo / presentacionAnterior : m.stock_minimo
+    const nuevoStockMinimoBase = stockMinimoEnChapas * nuevaPresentacion
+    const { error } = await supabase.from('materiales').update({
+      presentacion: nuevaPresentacion, stock_minimo: nuevoStockMinimoBase,
+    }).eq('id', m.id)
+    if (error) { alert('Error al actualizar la presentación: ' + error.message); return }
+    setEditingPresentacion(null)
+    fetchAll()
+  }
+
+  async function saveMaterialUbicacion(id: string, value: string) {
+    await supabase.from('materiales').update({ ubicacion: value.trim() || null }).eq('id', id)
+    setEditingUbicacion(null)
+    fetchAll()
+  }
+
+  function updateInvCount(materialId: string, value: string) {
+    setInvCounts((prev) => ({ ...prev, [materialId]: value }))
+  }
+
+  // Guarda el ajuste de UN material: calcula la diferencia contra el stock teórico y genera
+  // el movimiento correspondiente (ingreso si contó de más, egreso si contó de menos)
+  async function saveInventoryAdjustment(m: any) {
+    const contadoInput = invCounts[m.id]
+    if (contadoInput === undefined || contadoInput === '') return
+    const pres = Number(m.presentacion || 1)
+    const contadoBase = parseFloat(contadoInput) * pres
+    const stockTeorico = stockByMaterial[m.id] || 0
+    const diferencia = contadoBase - stockTeorico
+    if (diferencia !== 0) {
+      await supabase.from('material_movimientos').insert({
+        material_id: m.id,
+        tipo: diferencia > 0 ? 'ingreso' : 'egreso',
+        cantidad: Math.abs(diferencia),
+        origen: 'ajuste_inventario',
+        notes: `Inventario físico: contado ${contadoInput} u. (${Math.round(contadoBase * 100) / 100} ${m.unidad_medida}), teórico ${Math.round((stockTeorico / (pres > 1 ? pres : 1)) * 100) / 100} u.`,
+      })
+    }
+    setInvSavedDiffs((prev) => ({ ...prev, [m.id]: diferencia }))
+    fetchAll()
+  }
+
+  async function saveAllInventoryAdjustments() {
+    const toSave = materialesFiltradosInventario.filter((m) => invCounts[m.id] !== undefined && invCounts[m.id] !== '')
+    if (toSave.length === 0) { alert('No cargaste ningún conteo todavía.'); return }
+    if (!confirm(`¿Guardar el ajuste de ${toSave.length} material(es)?`)) return
+    for (const m of toSave) {
+      await saveInventoryAdjustment(m)
+    }
+  }
+
+  function exportInventarioToExcel() {
+    const header = ['Código', 'Material', 'Ubicación', 'Proveedor', 'Stock teórico (u.)', 'Contado (u.)', 'Diferencia (u.)']
+    const rows = materialesFiltradosInventario.map((m) => {
+      const pres = Number(m.presentacion || 1)
+      const stockTeorico = stockByMaterial[m.id] || 0
+      const stockTeoricoPres = pres > 1 ? stockTeorico / pres : stockTeorico
+      const contado = invCounts[m.id] !== undefined && invCounts[m.id] !== '' ? parseFloat(invCounts[m.id]) : ''
+      const diferencia = contado !== '' ? Math.round((Number(contado) - stockTeoricoPres) * 100) / 100 : ''
+      return [m.codigo || '', m.nombre, m.ubicacion || '', m.proveedor_nombre || '', Math.round(stockTeoricoPres * 100) / 100, contado, diferencia]
+    })
+    const csv = [header, ...rows]
+      .map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\n')
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `inventario_materia_prima_${new Date().toISOString().split('T')[0]}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  function exportStockToExcel() {
+    const header = ['Código', 'Material', 'Proveedor', 'Unidad base', 'Presentación', 'Stock actual (u. presentación)', 'Stock actual (unidad base)', 'Stock mínimo (u. presentación)', 'Estado']
+    const rows = materiales.map((m) => {
+      const stock = stockByMaterial[m.id] || 0
+      const pres = Number(m.presentacion || 1)
+      const bajo = stock < m.stock_minimo
+      return [
+        m.codigo || '', m.nombre, m.proveedor_nombre || '', m.unidad_medida, pres,
+        pres > 1 ? Math.round((stock / pres) * 100) / 100 : Math.round(stock * 100) / 100,
+        Math.round(stock * 100) / 100,
+        pres > 1 ? Math.round((m.stock_minimo / pres) * 100) / 100 : m.stock_minimo,
+        bajo ? 'STOCK BAJO' : 'OK',
+      ]
+    })
+    const csv = [header, ...rows]
+      .map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\n')
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `stock_materia_prima_${new Date().toISOString().split('T')[0]}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
   }
 
   async function removeProductMaterial(id: string) {
@@ -233,6 +344,12 @@ export default function MateriaPrimaPage() {
   })
   const materialTotalsList = Object.values(materialTotals)
 
+  // --- Inventario ---
+  const ubicacionesDisponibles = Array.from(new Set(materiales.map((m) => m.ubicacion).filter(Boolean))).sort()
+  const materialesFiltradosInventario = invUbicacionFilter
+    ? materiales.filter((m) => m.ubicacion === invUbicacionFilter)
+    : materiales
+
   function sortMaterials(list: typeof materialTotalsList) {
     return [...list].sort((a, b) => {
       if (calcSortBy === 'codigo') return a.codigo.localeCompare(b.codigo)
@@ -266,6 +383,7 @@ export default function MateriaPrimaPage() {
       <div className="flex gap-1 border-b border-slate-200 mb-6">
         {([
           ['stock', 'Stock'],
+          ['inventario', 'Inventario'],
           ['calculadora', 'Calculadora de compras'],
           ['composicion', 'Composición por producto'],
         ] as [Tab, string][]).map(([key, label]) => (
@@ -286,11 +404,18 @@ export default function MateriaPrimaPage() {
         <>
           <div className="flex items-center justify-between mb-3">
             <h2 className="font-semibold text-slate-700">Materiales</h2>
-            {canEdit && (
-              <button onClick={() => setShowNewMaterial(true)} className="text-xs bg-slate-700 text-white px-3 py-1.5 rounded-md hover:bg-slate-800">
-                + Nuevo material
-              </button>
-            )}
+            <div className="flex items-center gap-2">
+              {materiales.length > 0 && (
+                <button onClick={exportStockToExcel} className="text-xs border border-slate-300 text-slate-600 px-3 py-1.5 rounded-md hover:bg-slate-50">
+                  ⬇ Exportar a Excel
+                </button>
+              )}
+              {canEdit && (
+                <button onClick={() => setShowNewMaterial(true)} className="text-xs bg-slate-700 text-white px-3 py-1.5 rounded-md hover:bg-slate-800">
+                  + Nuevo material
+                </button>
+              )}
+            </div>
           </div>
 
           {materiales.length === 0 ? (
@@ -318,6 +443,7 @@ export default function MateriaPrimaPage() {
                       className="p-1.5 font-medium text-center cursor-pointer select-none hover:bg-slate-800 whitespace-nowrap">
                       Stock mínimo {stockSortBy === 'stock_minimo' ? (stockSortDir === 1 ? '▲' : '▼') : ''}
                     </th>
+                    <th className="p-1.5 font-medium text-center whitespace-nowrap">Presentación</th>
                     <th className="p-1.5 font-medium text-center">Estado</th>
                   </tr>
                 </thead>
@@ -340,6 +466,25 @@ export default function MateriaPrimaPage() {
                         <td className="p-1.5 text-slate-500">{m.proveedor_nombre || '—'}</td>
                         <td className="p-1.5 text-center text-slate-600 whitespace-nowrap">{formatStock(stock, m)}</td>
                         <td className="p-1.5 text-center text-slate-400 whitespace-nowrap">{formatStock(m.stock_minimo, m)}</td>
+                        <td className="p-1.5 text-center whitespace-nowrap">
+                          {canEdit && editingPresentacion === m.id ? (
+                            <input
+                              type="number" autoFocus defaultValue={m.presentacion || 1}
+                              onBlur={(e) => saveMaterialPresentacion(m, e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                              className="w-16 text-center rounded-md border border-blue-300 py-0.5 text-xs"
+                            />
+                          ) : (
+                            <button
+                              onClick={() => canEdit && setEditingPresentacion(m.id)}
+                              disabled={!canEdit}
+                              title={canEdit ? 'Click para editar' : undefined}
+                              className={canEdit ? 'hover:underline decoration-dotted' : ''}
+                            >
+                              {m.presentacion || 1} {m.unidad_medida}
+                            </button>
+                          )}
+                        </td>
                         <td className="p-1.5 text-center">
                           <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
                             bajo ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'
@@ -448,6 +593,116 @@ export default function MateriaPrimaPage() {
                       </td>
                     </tr>
                   ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ===================== INVENTARIO ===================== */}
+      {tab === 'inventario' && (
+        <>
+          <p className="text-xs text-slate-400 mb-4">
+            Contá materiales de a una ubicación por vez: filtrá por dónde están parados físicamente, tipeá lo que contaste
+            (en unidades de presentación, ej. chapas) y guardá — la diferencia contra el stock teórico queda registrada como ajuste.
+          </p>
+
+          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+            <select value={invUbicacionFilter} onChange={(e) => setInvUbicacionFilter(e.target.value)}
+              className="border border-slate-300 rounded-md px-2 py-1.5 text-sm">
+              <option value="">Todas las ubicaciones</option>
+              {ubicacionesDisponibles.map((u) => <option key={u} value={u}>{u}</option>)}
+              <option value="__sin__">(Sin ubicación asignada)</option>
+            </select>
+            <div className="flex items-center gap-2">
+              <button onClick={exportInventarioToExcel} className="text-xs border border-slate-300 text-slate-600 px-3 py-1.5 rounded-md hover:bg-slate-50">
+                ⬇ Exportar a Excel
+              </button>
+              {canEdit && (
+                <button onClick={saveAllInventoryAdjustments} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md hover:bg-emerald-700">
+                  Guardar todos los conteos
+                </button>
+              )}
+            </div>
+          </div>
+
+          {materialesFiltradosInventario.length === 0 ? (
+            <p className="text-slate-400 text-sm">No hay materiales para esta ubicación.</p>
+          ) : (
+            <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm bg-white">
+              <table className="w-full text-xs border-collapse">
+                <thead>
+                  <tr className="bg-slate-900 text-white text-left">
+                    <th className="p-1.5 font-medium">Código</th>
+                    <th className="p-1.5 font-medium">Material</th>
+                    <th className="p-1.5 font-medium">Ubicación</th>
+                    <th className="p-1.5 font-medium text-center">Stock teórico</th>
+                    <th className="p-1.5 font-medium text-center">Contado</th>
+                    <th className="p-1.5 font-medium text-center">Diferencia</th>
+                    <th className="p-1.5 font-medium"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(invUbicacionFilter === '__sin__'
+                    ? materiales.filter((m) => !m.ubicacion)
+                    : materialesFiltradosInventario
+                  ).map((m) => {
+                    const pres = Number(m.presentacion || 1)
+                    const stockTeorico = stockByMaterial[m.id] || 0
+                    const stockTeoricoPres = pres > 1 ? stockTeorico / pres : stockTeorico
+                    const contadoInput = invCounts[m.id] ?? ''
+                    const contadoNum = contadoInput !== '' ? parseFloat(contadoInput) : null
+                    const diferencia = contadoNum != null ? Math.round((contadoNum - stockTeoricoPres) * 100) / 100 : null
+                    const yaGuardado = invSavedDiffs[m.id] !== undefined
+                    return (
+                      <tr key={m.id} className="border-t border-slate-100">
+                        <td className="p-1.5 text-slate-400">{m.codigo || '—'}</td>
+                        <td className="p-1.5 text-slate-700 font-medium">{m.nombre}</td>
+                        <td className="p-1.5">
+                          {canEdit && editingUbicacion === m.id ? (
+                            <input
+                              autoFocus defaultValue={m.ubicacion || ''}
+                              placeholder="Ej: Estantería chapa"
+                              onBlur={(e) => saveMaterialUbicacion(m.id, e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                              className="w-32 rounded-md border border-blue-300 py-0.5 px-1 text-xs"
+                            />
+                          ) : (
+                            <button
+                              onClick={() => canEdit && setEditingUbicacion(m.id)}
+                              disabled={!canEdit}
+                              className={`text-slate-500 ${canEdit ? 'hover:underline decoration-dotted' : ''}`}
+                            >
+                              {m.ubicacion || (canEdit ? '+ asignar' : '—')}
+                            </button>
+                          )}
+                        </td>
+                        <td className="p-1.5 text-center text-slate-500">{Math.round(stockTeoricoPres * 100) / 100} u.</td>
+                        <td className="p-1.5 text-center">
+                          <input
+                            type="number" value={contadoInput}
+                            onChange={(e) => updateInvCount(m.id, e.target.value)}
+                            disabled={!canEdit}
+                            placeholder="—"
+                            className="w-16 text-center rounded-md border border-slate-300 py-0.5 disabled:bg-slate-50"
+                          />
+                        </td>
+                        <td className={`p-1.5 text-center font-semibold ${
+                          diferencia == null ? 'text-slate-300' : diferencia === 0 ? 'text-emerald-600' : diferencia > 0 ? 'text-blue-600' : 'text-rose-600'
+                        }`}>
+                          {diferencia != null ? (diferencia > 0 ? `+${diferencia}` : diferencia) : '—'}
+                        </td>
+                        <td className="p-1.5 text-right">
+                          {canEdit && contadoInput !== '' && (
+                            <button onClick={() => saveInventoryAdjustment(m)} className="text-xs text-blue-600 hover:underline">
+                              {yaGuardado ? 'Reguardar' : 'Guardar'}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
@@ -718,6 +973,11 @@ export default function MateriaPrimaPage() {
               <div>
                 <label className="text-xs text-slate-500">Stock mínimo (en unidades de presentación, ej: chapas)</label>
                 <input type="number" value={newMatStockMinimo} onChange={(e) => setNewMatStockMinimo(e.target.value)}
+                  className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full" />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">Ubicación física (opcional, para el inventario)</label>
+                <input placeholder="Ej: Estantería de chapa" value={newMatUbicacion} onChange={(e) => setNewMatUbicacion(e.target.value)}
                   className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full" />
               </div>
             </div>
