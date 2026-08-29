@@ -25,6 +25,7 @@ const groups = [
       { href: '/rendimiento', label: 'Rendimiento de Operarios', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
       { href: '/base-datos', label: 'Catálogo de Productos', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
       { href: '/insumos', label: 'Insumos', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
+      { href: '/materia-prima', label: 'Stock MP', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
     ],
   },
 ]

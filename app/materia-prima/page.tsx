@@ -37,6 +37,8 @@ export default function MateriaPrimaPage() {
   const [calcShowList, setCalcShowList] = useState(false)
   const [calcRows, setCalcRows] = useState<{ productId: string; productName: string; qty: string }[]>([])
   const [allProductMaterials, setAllProductMaterials] = useState<any[]>([])
+  const [calcGroupByProveedor, setCalcGroupByProveedor] = useState(true)
+  const [calcSortBy, setCalcSortBy] = useState<'nombre' | 'codigo' | 'proveedor'>('proveedor')
 
   // --- Stock ---
   const [stockByMaterial, setStockByMaterial] = useState<Record<string, number>>({})
@@ -57,7 +59,7 @@ export default function MateriaPrimaPage() {
     setMateriales(matData || [])
     const { data: sectorsData } = await supabase.from('sectors').select('*').order('sequence_no')
     setSectors(sectorsData || [])
-    const { data: pmData } = await supabase.from('producto_materiales').select('*, materiales(nombre, unidad_medida), sectors(name)')
+    const { data: pmData } = await supabase.from('producto_materiales').select('*, materiales(nombre, unidad_medida, codigo, proveedor_nombre), sectors(name)')
     setAllProductMaterials(pmData || [])
 
     const { data: stockData } = await supabase.from('material_stock').select('*')
@@ -188,7 +190,7 @@ export default function MateriaPrimaPage() {
   }
 
   // Total de materiales necesarios según las cantidades cargadas
-  const materialTotals: Record<string, { nombre: string; unidad: string; total: number }> = {}
+  const materialTotals: Record<string, { nombre: string; codigo: string; proveedor: string; unidad: string; total: number }> = {}
   calcRows.forEach((row) => {
     const qty = parseFloat(row.qty || '0')
     if (!qty) return
@@ -196,12 +198,35 @@ export default function MateriaPrimaPage() {
     rows.forEach((pm) => {
       const key = pm.material_id
       if (!materialTotals[key]) {
-        materialTotals[key] = { nombre: pm.materiales?.nombre || 'Material', unidad: pm.materiales?.unidad_medida || 'u.', total: 0 }
+        materialTotals[key] = {
+          nombre: pm.materiales?.nombre || 'Material',
+          codigo: pm.materiales?.codigo || '',
+          proveedor: pm.materiales?.proveedor_nombre || 'Sin proveedor',
+          unidad: pm.materiales?.unidad_medida || 'u.',
+          total: 0,
+        }
       }
       materialTotals[key].total += qty * pm.cantidad_por_unidad
     })
   })
-  const materialTotalsSorted = Object.values(materialTotals).sort((a, b) => a.nombre.localeCompare(b.nombre))
+  const materialTotalsList = Object.values(materialTotals)
+
+  function sortMaterials(list: typeof materialTotalsList) {
+    return [...list].sort((a, b) => {
+      if (calcSortBy === 'codigo') return a.codigo.localeCompare(b.codigo)
+      if (calcSortBy === 'proveedor') return a.proveedor.localeCompare(b.proveedor)
+      return a.nombre.localeCompare(b.nombre)
+    })
+  }
+
+  const materialTotalsSorted = sortMaterials(materialTotalsList)
+
+  const materialsByProveedor: Record<string, typeof materialTotalsList> = {}
+  materialTotalsList.forEach((m) => {
+    if (!materialsByProveedor[m.proveedor]) materialsByProveedor[m.proveedor] = []
+    materialsByProveedor[m.proveedor].push(m)
+  })
+  const proveedoresSorted = Object.keys(materialsByProveedor).sort((a, b) => a.localeCompare(b))
 
   if (loading) return <main className="p-6 text-slate-500">Cargando...</main>
 
@@ -253,7 +278,9 @@ export default function MateriaPrimaPage() {
               <table className="w-full text-sm border-collapse">
                 <thead>
                   <tr className="bg-slate-900 text-white text-left">
+                    <th className="p-3 font-medium">Código</th>
                     <th className="p-3 font-medium">Material</th>
+                    <th className="p-3 font-medium">Proveedor</th>
                     <th className="p-3 font-medium text-center">Stock actual</th>
                     <th className="p-3 font-medium text-center">Stock mínimo</th>
                     <th className="p-3 font-medium text-center">Estado</th>
@@ -265,7 +292,9 @@ export default function MateriaPrimaPage() {
                     const bajo = stock < m.stock_minimo
                     return (
                       <tr key={m.id} className="border-t border-slate-100">
+                        <td className="p-3 text-slate-400 text-xs">{m.codigo || '—'}</td>
                         <td className="p-3 text-slate-700 font-medium">{m.nombre}</td>
+                        <td className="p-3 text-slate-500 text-xs">{m.proveedor_nombre || '—'}</td>
                         <td className="p-3 text-center text-slate-600">{Math.round(stock * 100) / 100} {m.unidad_medida}</td>
                         <td className="p-3 text-center text-slate-400">{m.stock_minimo} {m.unidad_medida}</td>
                         <td className="p-3 text-center">
@@ -437,22 +466,65 @@ export default function MateriaPrimaPage() {
             )}
           </div>
 
-          <h2 className="font-semibold text-slate-700 mb-3">Materia prima necesaria</h2>
+          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+            <h2 className="font-semibold text-slate-700">Materia prima necesaria</h2>
+            <div className="flex items-center gap-2">
+              <label className="flex items-center gap-1.5 text-xs text-slate-500">
+                <input type="checkbox" checked={calcGroupByProveedor} onChange={(e) => setCalcGroupByProveedor(e.target.checked)} className="w-4 h-4 accent-slate-700" />
+                Agrupar por proveedor
+              </label>
+              <select value={calcSortBy} onChange={(e) => setCalcSortBy(e.target.value as any)} className="border border-slate-300 rounded-md px-2 py-1 text-xs">
+                <option value="proveedor">Ordenar por proveedor</option>
+                <option value="codigo">Ordenar por código</option>
+                <option value="nombre">Ordenar por nombre (A-Z)</option>
+              </select>
+            </div>
+          </div>
           {materialTotalsSorted.length === 0 ? (
             <p className="text-slate-400 text-sm">Cargá productos y cantidades arriba para ver el total.</p>
+          ) : calcGroupByProveedor ? (
+            <div className="space-y-4">
+              {proveedoresSorted.map((prov) => (
+                <div key={prov} className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm bg-white">
+                  <p className="px-3 py-2 text-xs font-semibold text-slate-500 bg-slate-50 border-b border-slate-200">{prov}</p>
+                  <table className="w-full text-sm border-collapse">
+                    <thead>
+                      <tr className="text-left text-slate-400 text-xs">
+                        <th className="p-3 font-medium">Código</th>
+                        <th className="p-3 font-medium">Material</th>
+                        <th className="p-3 font-medium text-right">Cantidad necesaria</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sortMaterials(materialsByProveedor[prov]).map((m) => (
+                        <tr key={m.nombre + m.codigo} className="border-t border-slate-100">
+                          <td className="p-3 text-slate-400 text-xs">{m.codigo || '—'}</td>
+                          <td className="p-3 text-slate-700 font-medium">{m.nombre}</td>
+                          <td className="p-3 text-right text-slate-700">{Math.round(m.total * 100) / 100} {m.unidad}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ))}
+            </div>
           ) : (
             <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm bg-white">
               <table className="w-full text-sm border-collapse">
                 <thead>
                   <tr className="bg-slate-900 text-white text-left">
+                    <th className="p-3 font-medium">Código</th>
                     <th className="p-3 font-medium">Material</th>
+                    <th className="p-3 font-medium">Proveedor</th>
                     <th className="p-3 font-medium text-right">Cantidad necesaria</th>
                   </tr>
                 </thead>
                 <tbody>
                   {materialTotalsSorted.map((m) => (
-                    <tr key={m.nombre} className="border-t border-slate-100">
+                    <tr key={m.nombre + m.codigo} className="border-t border-slate-100">
+                      <td className="p-3 text-slate-400 text-xs">{m.codigo || '—'}</td>
                       <td className="p-3 text-slate-700 font-medium">{m.nombre}</td>
+                      <td className="p-3 text-slate-500 text-xs">{m.proveedor}</td>
                       <td className="p-3 text-right text-slate-700">{Math.round(m.total * 100) / 100} {m.unidad}</td>
                     </tr>
                   ))}
