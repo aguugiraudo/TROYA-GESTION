@@ -26,8 +26,7 @@ function toggleSort(current: string, dir: 1 | -1, col: string, setBy: (v: any) =
 
 export default function MateriaPrimaPage() {
   const { role } = useAuth()
-  const canEdit = role === 'perfil_1'
-
+  const canEdit = role === 'perfil_1' || role === 'perfil_2'
   const [tab, setTab] = useState<Tab>('stock')
 
   const [products, setProducts] = useState<any[]>([])

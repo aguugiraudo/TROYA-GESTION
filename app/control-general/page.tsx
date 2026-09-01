@@ -127,7 +127,19 @@ export default function ControlGeneralPage() {
 
   async function confirmComplete() {
     if (!pendingComplete) return
-    await supabase.from('orders').update({ status: 'completed', completed_at: new Date().toISOString() }).eq('id', pendingComplete.id)
+    // La fecha de cierre debe ser cuándo se hizo REALMENTE el trabajo, no el momento en que
+    // alguien apretó "completar" (que puede ser días después). Buscamos la última fecha con
+    // un Real cargado para esta OP, y esa es la que se guarda como completed_at.
+    const { data: lastTask } = await supabase
+      .from('operator_daily_tasks')
+      .select('plan_date')
+      .eq('order_id', pendingComplete.id)
+      .not('actual_quantity', 'is', null)
+      .order('plan_date', { ascending: false })
+      .limit(1)
+    const completedAt = lastTask && lastTask[0] ? `${lastTask[0].plan_date}T12:00:00` : new Date().toISOString()
+
+    await supabase.from('orders').update({ status: 'completed', completed_at: completedAt }).eq('id', pendingComplete.id)
     setPendingComplete(null)
     refreshOrdersAndProgress()
   }

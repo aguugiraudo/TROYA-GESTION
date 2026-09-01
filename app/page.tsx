@@ -187,7 +187,6 @@ export default function Home() {
       loteId = data.id
     }
 
-    // Reemplazo completo: se borran los espesores existentes (arrastra los nidos) y se recargan desde el formulario
     await supabase.from('laser_espesores').delete().eq('laser_lote_id', loteId)
 
     for (const esp of laserEspesores) {
@@ -241,8 +240,20 @@ export default function Home() {
 
   async function confirmManualComplete() {
     if (!pendingManualComplete) return
+    // La fecha de cierre debe ser cuándo se hizo REALMENTE el trabajo, no el momento en que
+    // alguien apretó "completar" (que puede ser días después). Buscamos la última fecha con
+    // un Real cargado para esta OP, y esa es la que se guarda como completed_at.
+    const { data: lastTask } = await supabase
+      .from('operator_daily_tasks')
+      .select('plan_date')
+      .eq('order_id', pendingManualComplete.id)
+      .not('actual_quantity', 'is', null)
+      .order('plan_date', { ascending: false })
+      .limit(1)
+    const completedAt = lastTask && lastTask[0] ? `${lastTask[0].plan_date}T12:00:00` : new Date().toISOString()
+
     const { error } = await supabase.from('orders')
-      .update({ status: 'completed', completed_at: new Date().toISOString() })
+      .update({ status: 'completed', completed_at: completedAt })
       .eq('id', pendingManualComplete.id)
     if (error) { alert('Error al completar la OP: ' + error.message); return }
     setPendingManualComplete(null)
