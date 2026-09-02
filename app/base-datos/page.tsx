@@ -49,6 +49,8 @@ export default function CatalogoProductosPage() {
   const [laserMismatch, setLaserMismatch] = useState<{ computed: number; catalogValue: number | null; catalogRowId: string | null; catalogSectorId: string } | null>(null)
 
   const [loading, setLoading] = useState(true)
+  const [editingProductName, setEditingProductName] = useState(false)
+  const [editingProductCode, setEditingProductCode] = useState(false)
 
   async function fetchOverview() {
     const { data: productsData } = await supabase.from('products').select('*').order('name')
@@ -330,6 +332,22 @@ export default function CatalogoProductosPage() {
     setSelectedProduct({ ...selectedProduct, price: val })
   }
 
+  async function saveProductName(value: string) {
+    if (!selectedProduct || !value.trim()) return
+    const { error } = await supabase.from('products').update({ name: value.trim() }).eq('id', selectedProduct.id)
+    if (error) { alert('Error al renombrar el producto: ' + error.message); return }
+    setSelectedProduct({ ...selectedProduct, name: value.trim() })
+    setEditingProductName(false)
+  }
+
+  async function saveProductCode(value: string) {
+    if (!selectedProduct || !value.trim()) return
+    const { error } = await supabase.from('products').update({ code: value.trim() }).eq('id', selectedProduct.id)
+    if (error) { alert('Error al cambiar el código (puede que ya exista otro producto con ese código): ' + error.message); return }
+    setSelectedProduct({ ...selectedProduct, code: value.trim() })
+    setEditingProductCode(false)
+  }
+
   function sectorInfo(sectorId: string) {
     const productRow = productTimes.find((t) => t.sector_id === sectorId)
     const compRows = componentTimes.filter((t) => t.sector_id === sectorId)
@@ -470,8 +488,38 @@ export default function CatalogoProductosPage() {
               ← Volver al listado
             </button>
           </div>
-          <h2 className="font-semibold text-slate-700 mt-2 mb-1">{selectedProduct.name}</h2>
-          <p className="text-xs text-slate-400 mb-4">Código: {selectedProduct.code}</p>
+          {canEdit && editingProductName ? (
+            <input
+              autoFocus defaultValue={selectedProduct.name}
+              onBlur={(e) => saveProductName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+              className="font-semibold text-slate-700 mt-2 mb-1 border border-blue-300 rounded-md px-2 py-1 text-base w-full max-w-md"
+            />
+          ) : (
+            <h2
+              onClick={() => canEdit && setEditingProductName(true)}
+              title={canEdit ? 'Click para renombrar' : undefined}
+              className={`font-semibold text-slate-700 mt-2 mb-1 ${canEdit ? 'hover:underline decoration-dotted cursor-pointer' : ''}`}
+            >
+              {selectedProduct.name}
+            </h2>
+          )}
+          {canEdit && editingProductCode ? (
+            <input
+              autoFocus defaultValue={selectedProduct.code}
+              onBlur={(e) => saveProductCode(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+              className="text-xs border border-blue-300 rounded-md px-2 py-1 mb-4 w-32"
+            />
+          ) : (
+            <p
+              onClick={() => canEdit && setEditingProductCode(true)}
+              title={canEdit ? 'Click para editar' : undefined}
+              className={`text-xs text-slate-400 mb-4 ${canEdit ? 'hover:underline decoration-dotted cursor-pointer inline-block' : ''}`}
+            >
+              Código: {selectedProduct.code}
+            </p>
+          )}
 
           <div className="grid grid-cols-2 gap-3 mb-4">
             <div>
