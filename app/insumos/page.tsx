@@ -159,6 +159,33 @@ export default function InsumosPage() {
     fetchAll()
   }
 
+  async function saveItemCodigo(id: string, value: string) {
+    const { error } = await supabase.from('insumos').update({ codigo: value.trim() || null }).eq('id', id)
+    if (error) { alert('Error al actualizar el código: ' + error.message); return }
+    fetchAll()
+  }
+
+  async function saveItemNombre(id: string, value: string) {
+    if (!value.trim()) return
+    const { error } = await supabase.from('insumos').update({ nombre: value.trim() }).eq('id', id)
+    if (error) { alert('Error al renombrar: ' + error.message); return }
+    fetchAll()
+  }
+
+  async function saveItemUnidad(id: string, value: string) {
+    if (!value.trim()) return
+    const { error } = await supabase.from('insumos').update({ unidad_medida: value.trim() }).eq('id', id)
+    if (error) { alert('Error al actualizar la unidad: ' + error.message); return }
+    fetchAll()
+  }
+
+  async function saveItemStockMinimo(id: string, value: string) {
+    const val = Math.max(0, parseFloat(value || '0'))
+    const { error } = await supabase.from('insumos').update({ stock_minimo: val }).eq('id', id)
+    if (error) { alert('Error al actualizar el stock mínimo: ' + error.message); return }
+    fetchAll()
+  }
+
   function matchesSearch(it: any, search: string) {
     const s = search.toLowerCase()
     return it.nombre.toLowerCase().includes(s) || (it.codigo || '').toLowerCase().includes(s)
@@ -329,13 +356,13 @@ export default function InsumosPage() {
               {categorias.filter((c) => itemsByCategoria[c.id]?.length > 0).map((c) => (
                 <div key={c.id}>
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">{c.nombre}</p>
-                  <ItemsTable items={itemsByCategoria[c.id]} stockByItem={stockByItem} canEdit={canEdit} onDelete={deleteItem} onSelect={openItemHistory} />
+                  <ItemsTable items={itemsByCategoria[c.id]} stockByItem={stockByItem} canEdit={canEdit} onDelete={deleteItem} onSelect={openItemHistory} onSaveCodigo={saveItemCodigo} onSaveNombre={saveItemNombre} onSaveUnidad={saveItemUnidad} onSaveStockMinimo={saveItemStockMinimo} />
                 </div>
               ))}
               {sinCategoria.length > 0 && (
                 <div>
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Sin categoría</p>
-                  <ItemsTable items={sinCategoria} stockByItem={stockByItem} canEdit={canEdit} onDelete={deleteItem} onSelect={openItemHistory} />
+                  <ItemsTable items={sinCategoria} stockByItem={stockByItem} canEdit={canEdit} onDelete={deleteItem} onSelect={openItemHistory} onSaveCodigo={saveItemCodigo} onSaveNombre={saveItemNombre} onSaveUnidad={saveItemUnidad} onSaveStockMinimo={saveItemStockMinimo} />
                 </div>
               )}
             </div>
@@ -591,9 +618,17 @@ export default function InsumosPage() {
   )
 }
 
-function ItemsTable({ items, stockByItem, canEdit, onDelete, onSelect }: {
+function ItemsTable({ items, stockByItem, canEdit, onDelete, onSelect, onSaveCodigo, onSaveNombre, onSaveUnidad, onSaveStockMinimo }: {
   items: any[]; stockByItem: Record<string, number>; canEdit: boolean; onDelete: (id: string) => void; onSelect: (item: any) => void
+  onSaveCodigo: (id: string, value: string) => void; onSaveNombre: (id: string, value: string) => void
+  onSaveUnidad: (id: string, value: string) => void; onSaveStockMinimo: (id: string, value: string) => void
 }) {
+  const [editingField, setEditingField] = useState<{ id: string; field: 'codigo' | 'nombre' | 'unidad' | 'stock_minimo' } | null>(null)
+
+  function isEditing(id: string, field: string) {
+    return editingField?.id === id && editingField?.field === field
+  }
+
   return (
     <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm bg-white">
       <table className="w-full text-sm border-collapse">
@@ -601,6 +636,7 @@ function ItemsTable({ items, stockByItem, canEdit, onDelete, onSelect }: {
           <tr className="bg-slate-900 text-white text-left">
             <th className="p-3 font-medium">Código</th>
             <th className="p-3 font-medium">Ítem</th>
+            <th className="p-3 font-medium text-center">Unidad</th>
             <th className="p-3 font-medium text-center">Stock actual</th>
             <th className="p-3 font-medium text-center">Stock mínimo</th>
             <th className="p-3 font-medium text-center">Estado</th>
@@ -613,14 +649,65 @@ function ItemsTable({ items, stockByItem, canEdit, onDelete, onSelect }: {
             const bajo = stock < it.stock_minimo
             return (
               <tr key={it.id} className="border-t border-slate-100">
-                <td className="p-3 text-slate-400 text-xs">{it.codigo || '—'}</td>
+                <td className="p-3 text-slate-400 text-xs">
+                  {canEdit && isEditing(it.id, 'codigo') ? (
+                    <input autoFocus defaultValue={it.codigo || ''}
+                      onBlur={(e) => { onSaveCodigo(it.id, e.target.value); setEditingField(null) }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                      className="w-20 rounded-md border border-blue-300 py-0.5 px-1 text-xs" />
+                  ) : (
+                    <button onClick={() => canEdit && setEditingField({ id: it.id, field: 'codigo' })} disabled={!canEdit}
+                      className={canEdit ? 'hover:underline decoration-dotted' : ''}>
+                      {it.codigo || (canEdit ? '+ código' : '—')}
+                    </button>
+                  )}
+                </td>
                 <td className="p-3">
-                  <button onClick={() => onSelect(it)} className="text-slate-700 font-medium hover:text-blue-700 hover:underline decoration-dotted text-left">
-                    {it.nombre}
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    {canEdit && isEditing(it.id, 'nombre') ? (
+                      <input autoFocus defaultValue={it.nombre}
+                        onBlur={(e) => { onSaveNombre(it.id, e.target.value); setEditingField(null) }}
+                        onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                        className="w-full min-w-[160px] rounded-md border border-blue-300 py-0.5 px-1 text-sm" />
+                    ) : (
+                      <>
+                        <button onClick={() => onSelect(it)} className="text-slate-700 font-medium hover:text-blue-700 hover:underline decoration-dotted text-left" title="Ver historial">
+                          {it.nombre}
+                        </button>
+                        {canEdit && (
+                          <button onClick={() => setEditingField({ id: it.id, field: 'nombre' })} title="Renombrar" className="text-slate-300 hover:text-blue-600 text-xs">✎</button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </td>
+                <td className="p-3 text-center">
+                  {canEdit && isEditing(it.id, 'unidad') ? (
+                    <input autoFocus defaultValue={it.unidad_medida}
+                      onBlur={(e) => { onSaveUnidad(it.id, e.target.value); setEditingField(null) }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                      className="w-16 text-center rounded-md border border-blue-300 py-0.5 text-xs" />
+                  ) : (
+                    <button onClick={() => canEdit && setEditingField({ id: it.id, field: 'unidad' })} disabled={!canEdit}
+                      className={canEdit ? 'hover:underline decoration-dotted' : ''}>
+                      {it.unidad_medida}
+                    </button>
+                  )}
                 </td>
                 <td className="p-3 text-center text-slate-600">{stock} {it.unidad_medida}</td>
-                <td className="p-3 text-center text-slate-400">{it.stock_minimo} {it.unidad_medida}</td>
+                <td className="p-3 text-center text-slate-400">
+                  {canEdit && isEditing(it.id, 'stock_minimo') ? (
+                    <input type="number" autoFocus defaultValue={it.stock_minimo}
+                      onBlur={(e) => { onSaveStockMinimo(it.id, e.target.value); setEditingField(null) }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                      className="w-16 text-center rounded-md border border-blue-300 py-0.5 text-xs" />
+                  ) : (
+                    <button onClick={() => canEdit && setEditingField({ id: it.id, field: 'stock_minimo' })} disabled={!canEdit}
+                      className={canEdit ? 'hover:underline decoration-dotted' : ''}>
+                      {it.stock_minimo} {it.unidad_medida}
+                    </button>
+                  )}
+                </td>
                 <td className="p-3 text-center">
                   <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
                     bajo ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'
