@@ -27,6 +27,7 @@ function toggleSort(current: string, dir: 1 | -1, col: string, setBy: (v: any) =
 export default function MateriaPrimaPage() {
   const { role } = useAuth()
   const canEdit = role === 'perfil_1' || role === 'perfil_2'
+
   const [tab, setTab] = useState<Tab>('stock')
 
   const [products, setProducts] = useState<any[]>([])
@@ -62,6 +63,7 @@ export default function MateriaPrimaPage() {
   const [movimientos, setMovimientos] = useState<any[]>([])
   const [showNewMaterial, setShowNewMaterial] = useState(false)
   const [editingPresentacion, setEditingPresentacion] = useState<string | null>(null)
+  const [editingUnidad, setEditingUnidad] = useState<string | null>(null)
   const [editingUbicacion, setEditingUbicacion] = useState<string | null>(null)
 
   // --- Inventario físico ---
@@ -193,6 +195,14 @@ export default function MateriaPrimaPage() {
     }).eq('id', m.id)
     if (error) { alert('Error al actualizar la presentación: ' + error.message); return }
     setEditingPresentacion(null)
+    fetchAll()
+  }
+
+  async function saveMaterialUnidad(id: string, value: string) {
+    if (!value.trim()) { setEditingUnidad(null); return }
+    const { error } = await supabase.from('materiales').update({ unidad_medida: value.trim() }).eq('id', id)
+    if (error) { alert('Error al actualizar la unidad: ' + error.message); return }
+    setEditingUnidad(null)
     fetchAll()
   }
 
@@ -442,6 +452,7 @@ export default function MateriaPrimaPage() {
                       className="p-1.5 font-medium text-center cursor-pointer select-none hover:bg-slate-800 whitespace-nowrap">
                       Stock mínimo {stockSortBy === 'stock_minimo' ? (stockSortDir === 1 ? '▲' : '▼') : ''}
                     </th>
+                    <th className="p-1.5 font-medium text-center whitespace-nowrap">Unidad</th>
                     <th className="p-1.5 font-medium text-center whitespace-nowrap">Presentación</th>
                     <th className="p-1.5 font-medium text-center">Estado</th>
                   </tr>
@@ -466,6 +477,26 @@ export default function MateriaPrimaPage() {
                         <td className="p-1.5 text-center text-slate-600 whitespace-nowrap">{formatStock(stock, m)}</td>
                         <td className="p-1.5 text-center text-slate-400 whitespace-nowrap">{formatStock(m.stock_minimo, m)}</td>
                         <td className="p-1.5 text-center whitespace-nowrap">
+                          {canEdit && editingUnidad === m.id ? (
+                            <input
+                              autoFocus defaultValue={m.unidad_medida}
+                              placeholder="kg, m2, mm, u."
+                              onBlur={(e) => saveMaterialUnidad(m.id, e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                              className="w-16 text-center rounded-md border border-blue-300 py-0.5 text-xs"
+                            />
+                          ) : (
+                            <button
+                              onClick={() => canEdit && setEditingUnidad(m.id)}
+                              disabled={!canEdit}
+                              title={canEdit ? 'Click para editar' : undefined}
+                              className={canEdit ? 'hover:underline decoration-dotted' : ''}
+                            >
+                              {m.unidad_medida}
+                            </button>
+                          )}
+                        </td>
+                        <td className="p-1.5 text-center whitespace-nowrap">
                           {canEdit && editingPresentacion === m.id ? (
                             <input
                               type="number" autoFocus defaultValue={m.presentacion || 1}
@@ -480,7 +511,7 @@ export default function MateriaPrimaPage() {
                               title={canEdit ? 'Click para editar' : undefined}
                               className={canEdit ? 'hover:underline decoration-dotted' : ''}
                             >
-                              {m.presentacion || 1} {m.unidad_medida}
+                              {m.presentacion || 1}
                             </button>
                           )}
                         </td>
