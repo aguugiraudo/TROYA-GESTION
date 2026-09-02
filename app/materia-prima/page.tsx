@@ -202,6 +202,18 @@ export default function MateriaPrimaPage() {
     fetchAll()
   }
 
+  async function deleteMaterial(m: any) {
+    const usosEnProductos = allProductMaterials.filter((pm) => pm.material_id === m.id).length
+    const tieneMovimientos = movimientos.some((mv) => mv.material_id === m.id)
+    let msg = `¿Eliminar "${m.nombre}"?`
+    if (usosEnProductos > 0) msg += `\n\nOjo: está usado en la composición de ${usosEnProductos} producto(s) — esos vínculos también se van a borrar.`
+    if (tieneMovimientos) msg += `\n\nOjo: tiene movimientos de stock cargados (ingresos/egresos/ajustes) — se van a borrar junto con el material. Esto no se puede deshacer.`
+    if (!confirm(msg)) return
+    const { error } = await supabase.from('materiales').delete().eq('id', m.id)
+    if (error) { alert('Error al eliminar: ' + error.message); return }
+    fetchAll()
+  }
+
   async function saveMaterialNombre(id: string, value: string) {
     if (!value.trim()) { setEditingNombre(null); return }
     const { error } = await supabase.from('materiales').update({ nombre: value.trim() }).eq('id', id)
@@ -491,6 +503,7 @@ export default function MateriaPrimaPage() {
                     <th className="p-1.5 font-medium text-center whitespace-nowrap">Unidad</th>
                     <th className="p-1.5 font-medium text-center whitespace-nowrap">Presentación</th>
                     <th className="p-1.5 font-medium text-center">Estado</th>
+                    <th className="p-1.5 font-medium"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -626,6 +639,11 @@ export default function MateriaPrimaPage() {
                           }`}>
                             {bajo ? '⚠ Bajo' : 'OK'}
                           </span>
+                        </td>
+                        <td className="p-1.5 text-right">
+                          {canEdit && (
+                            <button onClick={() => deleteMaterial(m)} className="text-[10px] text-rose-500 hover:underline">Eliminar</button>
+                          )}
                         </td>
                       </tr>
                     )
