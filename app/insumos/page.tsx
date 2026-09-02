@@ -59,6 +59,24 @@ export default function InsumosPage() {
   const [outFecha, setOutFecha] = useState(today())
   const [outMotivo, setOutMotivo] = useState('')
 
+  // --- Historial por ítem (modal) ---
+  const [historyItem, setHistoryItem] = useState<any | null>(null)
+  const [historyRows, setHistoryRows] = useState<any[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+
+  async function openItemHistory(item: any) {
+    setHistoryItem(item)
+    setHistoryLoading(true)
+    const { data } = await supabase
+      .from('insumo_movimientos')
+      .select('*, operators(full_name)')
+      .eq('insumo_id', item.id)
+      .order('fecha', { ascending: false })
+      .order('created_at', { ascending: false })
+    setHistoryRows(data || [])
+    setHistoryLoading(false)
+  }
+
   async function fetchAll() {
     setLoading(true)
     const { data: catData } = await supabase.from('insumo_categorias').select('*').order('nombre')
@@ -311,13 +329,13 @@ export default function InsumosPage() {
               {categorias.filter((c) => itemsByCategoria[c.id]?.length > 0).map((c) => (
                 <div key={c.id}>
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">{c.nombre}</p>
-                  <ItemsTable items={itemsByCategoria[c.id]} stockByItem={stockByItem} canEdit={canEdit} onDelete={deleteItem} />
+                  <ItemsTable items={itemsByCategoria[c.id]} stockByItem={stockByItem} canEdit={canEdit} onDelete={deleteItem} onSelect={openItemHistory} />
                 </div>
               ))}
               {sinCategoria.length > 0 && (
                 <div>
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Sin categoría</p>
-                  <ItemsTable items={sinCategoria} stockByItem={stockByItem} canEdit={canEdit} onDelete={deleteItem} />
+                  <ItemsTable items={sinCategoria} stockByItem={stockByItem} canEdit={canEdit} onDelete={deleteItem} onSelect={openItemHistory} />
                 </div>
               )}
             </div>
@@ -518,12 +536,63 @@ export default function InsumosPage() {
           </div>
         </div>
       )}
+
+      {/* MODAL: historial de movimientos de un ítem puntual */}
+      {historyItem && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setHistoryItem(null)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[80vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-start mb-1">
+              <div>
+                <h3 className="font-semibold text-slate-800 text-lg">{historyItem.nombre}</h3>
+                <p className="text-sm text-slate-500">
+                  Stock actual: <strong className="text-slate-700">{stockByItem[historyItem.id] || 0} {historyItem.unidad_medida}</strong>
+                </p>
+              </div>
+              <button onClick={() => setHistoryItem(null)} className="text-slate-400 hover:text-slate-600 text-lg leading-none">✕</button>
+            </div>
+
+            <div className="mt-4">
+              {historyLoading ? (
+                <p className="text-sm text-slate-400">Cargando...</p>
+              ) : historyRows.length === 0 ? (
+                <p className="text-sm text-slate-400">Todavía no hay movimientos para este ítem.</p>
+              ) : (
+                <div className="space-y-2">
+                  {historyRows.map((m: any) => (
+                    <div key={m.id} className="flex items-center justify-between gap-3 border-b border-slate-100 pb-2">
+                      <div className="min-w-0">
+                        <p className="text-sm text-slate-700">
+                          {shortDate(m.fecha)} — <strong className={m.tipo === 'ingreso' ? 'text-emerald-700' : 'text-rose-700'}>
+                            {m.tipo === 'ingreso' ? '+' : '-'}{m.cantidad} {historyItem.unidad_medida}
+                          </strong>
+                        </p>
+                        <p className="text-xs text-slate-500">
+                          {m.operators?.full_name || 'Sin operario'}{m.notes ? ` — "${m.notes}"` : ''}
+                        </p>
+                      </div>
+                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0 ${
+                        m.tipo === 'ingreso' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
+                      }`}>
+                        {m.tipo === 'ingreso' ? 'Ingreso' : 'Egreso'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <button onClick={() => setHistoryItem(null)} className="mt-4 w-full bg-slate-800 text-white rounded-md py-2 text-sm font-medium hover:bg-slate-900">
+              Cerrar
+            </button>
+          </div>
+        </div>
+      )}
     </main>
   )
 }
 
-function ItemsTable({ items, stockByItem, canEdit, onDelete }: {
-  items: any[]; stockByItem: Record<string, number>; canEdit: boolean; onDelete: (id: string) => void
+function ItemsTable({ items, stockByItem, canEdit, onDelete, onSelect }: {
+  items: any[]; stockByItem: Record<string, number>; canEdit: boolean; onDelete: (id: string) => void; onSelect: (item: any) => void
 }) {
   return (
     <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm bg-white">
@@ -545,7 +614,11 @@ function ItemsTable({ items, stockByItem, canEdit, onDelete }: {
             return (
               <tr key={it.id} className="border-t border-slate-100">
                 <td className="p-3 text-slate-400 text-xs">{it.codigo || '—'}</td>
-                <td className="p-3 text-slate-700 font-medium">{it.nombre}</td>
+                <td className="p-3">
+                  <button onClick={() => onSelect(it)} className="text-slate-700 font-medium hover:text-blue-700 hover:underline decoration-dotted text-left">
+                    {it.nombre}
+                  </button>
+                </td>
                 <td className="p-3 text-center text-slate-600">{stock} {it.unidad_medida}</td>
                 <td className="p-3 text-center text-slate-400">{it.stock_minimo} {it.unidad_medida}</td>
                 <td className="p-3 text-center">
