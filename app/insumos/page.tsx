@@ -32,6 +32,7 @@ export default function InsumosPage() {
   const [loading, setLoading] = useState(true)
 
   const [newCategoriaName, setNewCategoriaName] = useState('')
+  const [editingCategoriaId, setEditingCategoriaId] = useState<string | null>(null)
 
   const [showNewItem, setShowNewItem] = useState(false)
   const [newItemName, setNewItemName] = useState('')
@@ -92,6 +93,25 @@ export default function InsumosPage() {
     const { error } = await supabase.from('insumo_categorias').insert({ nombre: newCategoriaName.trim() })
     if (error) { alert('Error al crear la categoría: ' + error.message); return }
     setNewCategoriaName('')
+    fetchAll()
+  }
+
+  async function saveCategoriaName(id: string, value: string) {
+    if (!value.trim()) { setEditingCategoriaId(null); return }
+    const { error } = await supabase.from('insumo_categorias').update({ nombre: value.trim() }).eq('id', id)
+    if (error) { alert('Error al renombrar: ' + error.message); return }
+    setEditingCategoriaId(null)
+    fetchAll()
+  }
+
+  async function deleteCategoria(id: string, nombre: string) {
+    const itemsEnCategoria = items.filter((it) => it.categoria_id === id).length
+    const msg = itemsEnCategoria > 0
+      ? `"${nombre}" tiene ${itemsEnCategoria} ítem(s) cargado(s). Si la eliminás, esos ítems quedan como "Sin categoría" (no se borran). ¿Continuar?`
+      : `¿Eliminar la categoría "${nombre}"?`
+    if (!confirm(msg)) return
+    const { error } = await supabase.from('insumo_categorias').delete().eq('id', id)
+    if (error) { alert('Error al eliminar: ' + error.message); return }
     fetchAll()
   }
 
@@ -239,7 +259,25 @@ export default function InsumosPage() {
               <h2 className="font-semibold text-slate-700 text-sm mb-2">Categorías</h2>
               <div className="flex flex-wrap items-center gap-2">
                 {categorias.map((c) => (
-                  <span key={c.id} className="text-xs bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full">{c.nombre}</span>
+                  editingCategoriaId === c.id ? (
+                    <input
+                      key={c.id}
+                      autoFocus
+                      defaultValue={c.nombre}
+                      onBlur={(e) => saveCategoriaName(c.id, e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                      className="text-xs border border-blue-300 rounded-full px-2.5 py-1 w-32"
+                    />
+                  ) : (
+                    <span key={c.id} className="inline-flex items-center gap-1.5 text-xs bg-slate-100 text-slate-600 pl-2.5 pr-1.5 py-1 rounded-full">
+                      <button onClick={() => setEditingCategoriaId(c.id)} className="hover:underline decoration-dotted" title="Click para renombrar">
+                        {c.nombre}
+                      </button>
+                      <button onClick={() => deleteCategoria(c.id, c.nombre)} className="text-slate-400 hover:text-rose-600 rounded-full w-3.5 h-3.5 flex items-center justify-center text-[10px]" title="Eliminar categoría">
+                        ✕
+                      </button>
+                    </span>
+                  )
                 ))}
                 <div className="flex gap-1 ml-auto">
                   <input
