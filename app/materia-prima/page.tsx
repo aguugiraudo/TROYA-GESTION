@@ -65,6 +65,10 @@ export default function MateriaPrimaPage() {
   const [editingPresentacion, setEditingPresentacion] = useState<string | null>(null)
   const [editingUnidad, setEditingUnidad] = useState<string | null>(null)
   const [editingUbicacion, setEditingUbicacion] = useState<string | null>(null)
+  const [editingNombre, setEditingNombre] = useState<string | null>(null)
+  const [editingCodigo, setEditingCodigo] = useState<string | null>(null)
+  const [editingProveedor, setEditingProveedor] = useState<string | null>(null)
+  const [editingStockMinimo, setEditingStockMinimo] = useState<string | null>(null)
 
   // --- Inventario físico ---
   const [invUbicacionFilter, setInvUbicacionFilter] = useState('')
@@ -195,6 +199,38 @@ export default function MateriaPrimaPage() {
     }).eq('id', m.id)
     if (error) { alert('Error al actualizar la presentación: ' + error.message); return }
     setEditingPresentacion(null)
+    fetchAll()
+  }
+
+  async function saveMaterialNombre(id: string, value: string) {
+    if (!value.trim()) { setEditingNombre(null); return }
+    const { error } = await supabase.from('materiales').update({ nombre: value.trim() }).eq('id', id)
+    if (error) { alert('Error al renombrar: ' + error.message); return }
+    setEditingNombre(null)
+    fetchAll()
+  }
+
+  async function saveMaterialCodigo(id: string, value: string) {
+    const { error } = await supabase.from('materiales').update({ codigo: value.trim() || null }).eq('id', id)
+    if (error) { alert('Error al actualizar el código (puede que ya exista otro material con ese código): ' + error.message); return }
+    setEditingCodigo(null)
+    fetchAll()
+  }
+
+  async function saveMaterialProveedor(id: string, value: string) {
+    const { error } = await supabase.from('materiales').update({ proveedor_nombre: value.trim() || null }).eq('id', id)
+    if (error) { alert('Error al actualizar el proveedor: ' + error.message); return }
+    setEditingProveedor(null)
+    fetchAll()
+  }
+
+  // El stock mínimo se tipea en unidades de presentación (chapas), igual que se muestra en pantalla
+  async function saveMaterialStockMinimo(m: any, value: string) {
+    const pres = Number(m.presentacion || 1)
+    const nuevoStockMinimoBase = parseFloat(value || '0') * pres
+    const { error } = await supabase.from('materiales').update({ stock_minimo: nuevoStockMinimoBase }).eq('id', m.id)
+    if (error) { alert('Error al actualizar el stock mínimo: ' + error.message); return }
+    setEditingStockMinimo(null)
     fetchAll()
   }
 
@@ -471,11 +507,80 @@ export default function MateriaPrimaPage() {
                     const bajo = stock < m.stock_minimo
                     return (
                       <tr key={m.id} className="border-t border-slate-100">
-                        <td className="p-1.5 text-slate-400">{m.codigo || '—'}</td>
-                        <td className="p-1.5 text-slate-700 font-medium">{m.nombre}</td>
-                        <td className="p-1.5 text-slate-500">{m.proveedor_nombre || '—'}</td>
+                        <td className="p-1.5 text-slate-400 whitespace-nowrap">
+                          {canEdit && editingCodigo === m.id ? (
+                            <input
+                              autoFocus defaultValue={m.codigo || ''}
+                              onBlur={(e) => saveMaterialCodigo(m.id, e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                              className="w-20 rounded-md border border-blue-300 py-0.5 px-1 text-xs"
+                            />
+                          ) : (
+                            <button
+                              onClick={() => canEdit && setEditingCodigo(m.id)}
+                              disabled={!canEdit}
+                              className={canEdit ? 'hover:underline decoration-dotted' : ''}
+                            >
+                              {m.codigo || (canEdit ? '+ código' : '—')}
+                            </button>
+                          )}
+                        </td>
+                        <td className="p-1.5 text-slate-700 font-medium">
+                          {canEdit && editingNombre === m.id ? (
+                            <input
+                              autoFocus defaultValue={m.nombre}
+                              onBlur={(e) => saveMaterialNombre(m.id, e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                              className="w-full min-w-[160px] rounded-md border border-blue-300 py-0.5 px-1 text-xs"
+                            />
+                          ) : (
+                            <button
+                              onClick={() => canEdit && setEditingNombre(m.id)}
+                              disabled={!canEdit}
+                              className={`text-left ${canEdit ? 'hover:underline decoration-dotted' : ''}`}
+                            >
+                              {m.nombre}
+                            </button>
+                          )}
+                        </td>
+                        <td className="p-1.5 text-slate-500">
+                          {canEdit && editingProveedor === m.id ? (
+                            <input
+                              autoFocus defaultValue={m.proveedor_nombre || ''}
+                              onBlur={(e) => saveMaterialProveedor(m.id, e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                              className="w-32 rounded-md border border-blue-300 py-0.5 px-1 text-xs"
+                            />
+                          ) : (
+                            <button
+                              onClick={() => canEdit && setEditingProveedor(m.id)}
+                              disabled={!canEdit}
+                              className={canEdit ? 'hover:underline decoration-dotted' : ''}
+                            >
+                              {m.proveedor_nombre || (canEdit ? '+ proveedor' : '—')}
+                            </button>
+                          )}
+                        </td>
                         <td className="p-1.5 text-center text-slate-600 whitespace-nowrap">{formatStock(stock, m)}</td>
-                        <td className="p-1.5 text-center text-slate-400 whitespace-nowrap">{formatStock(m.stock_minimo, m)}</td>
+                        <td className="p-1.5 text-center text-slate-400 whitespace-nowrap">
+                          {canEdit && editingStockMinimo === m.id ? (
+                            <input
+                              type="number" autoFocus defaultValue={Number(m.presentacion || 1) > 1 ? Math.round((m.stock_minimo / Number(m.presentacion || 1)) * 100) / 100 : m.stock_minimo}
+                              onBlur={(e) => saveMaterialStockMinimo(m, e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                              className="w-16 text-center rounded-md border border-blue-300 py-0.5 text-xs"
+                            />
+                          ) : (
+                            <button
+                              onClick={() => canEdit && setEditingStockMinimo(m.id)}
+                              disabled={!canEdit}
+                              title={canEdit ? 'Click para editar (en unidades de presentación)' : undefined}
+                              className={canEdit ? 'hover:underline decoration-dotted' : ''}
+                            >
+                              {formatStock(m.stock_minimo, m)}
+                            </button>
+                          )}
+                        </td>
                         <td className="p-1.5 text-center whitespace-nowrap">
                           {canEdit && editingUnidad === m.id ? (
                             <input
