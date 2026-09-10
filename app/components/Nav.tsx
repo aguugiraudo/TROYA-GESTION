@@ -15,6 +15,7 @@ const groups = [
       { href: '/control-general', label: 'Avance de Producción', roles: ['perfil_1', 'perfil_2', 'perfil_3', 'perfil_4'] },
       { href: '/plan-diario', label: 'Plan Diario', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
       { href: '/balance-mensual', label: 'Capacidad Mensual', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
+      { href: '/terciarizacion', label: 'Terciarización', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
     ],
   },
   {
