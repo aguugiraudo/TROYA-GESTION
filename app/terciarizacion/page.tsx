@@ -90,6 +90,8 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
   const [showNewProceso, setShowNewProceso] = useState(false)
   const [newProcesoName, setNewProcesoName] = useState('')
 
+  const [fModalidad, setFModalidad] = useState<'horas' | 'produccion'>('horas')
+
   const [fTercero, setFTercero] = useState('')
   const [fProceso, setFProceso] = useState('')
   const [fFecha, setFFecha] = useState(today())
@@ -98,9 +100,23 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
   const [fHoras, setFHoras] = useState('')
   const [fObs, setFObs] = useState('')
 
+  const [fProdTercero, setFProdTercero] = useState('')
+  const [fProdProducto, setFProdProducto] = useState('')
+  const [fProdFecha, setFProdFecha] = useState(today())
+  const [fProdCantidad, setFProdCantidad] = useState('')
+  const [fProdObs, setFProdObs] = useState('')
+
+  const [valoresProduccion, setValoresProduccion] = useState<any[]>([])
+  const [registrosProduccion, setRegistrosProduccion] = useState<any[]>([])
   const [editingValor, setEditingValor] = useState<string | null>(null)
+  const [editingValorProd, setEditingValorProd] = useState<string | null>(null)
   const [editingCell, setEditingCell] = useState<{ id: string; field: 'fecha' | 'proceso' | 'entrada' | 'salida' | 'horas' | 'obs' } | null>(null)
+  const [editingCellProd, setEditingCellProd] = useState<{ id: string; field: 'fecha' | 'producto' | 'cantidad' | 'obs' } | null>(null)
   const [showGestion, setShowGestion] = useState(false)
+  const [showNewValorProd, setShowNewValorProd] = useState(false)
+  const [nvpTercero, setNvpTercero] = useState('')
+  const [nvpProducto, setNvpProducto] = useState('')
+  const [nvpValor, setNvpValor] = useState('')
 
   const [externaTotal, setExternaTotal] = useState(0)
 
@@ -114,6 +130,8 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
     if (mostrarValores) {
       const { data: valoresData } = await supabase.from('terceros_valores_hora').select('*')
       setValoresHora(valoresData || [])
+      const { data: valoresProdData } = await supabase.from('terceros_valores_produccion').select('*, terceros(nombre)')
+      setValoresProduccion(valoresProdData || [])
     }
 
     const [y, m] = monthValue.split('-').map(Number)
@@ -126,6 +144,13 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
       .gte('fecha', monthStart).lt('fecha', monthEnd)
       .order('fecha', { ascending: false })
     setRegistros(regData || [])
+
+    const { data: regProdData } = await supabase
+      .from('terceros_registro_produccion')
+      .select('*, terceros(nombre)')
+      .gte('fecha', monthStart).lt('fecha', monthEnd)
+      .order('fecha', { ascending: false })
+    setRegistrosProduccion(regProdData || [])
 
     if (externaResumen) {
       const { data: tercData } = await supabase.from('tercerizaciones').select('cantidad_enviada, precio_unitario, fecha_envio')
@@ -249,11 +274,104 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
     fetchAll()
   }
 
+  // --- Producción ---
+  function resetFormProduccion() {
+    setFProdTercero(''); setFProdProducto(''); setFProdFecha(today()); setFProdCantidad(''); setFProdObs('')
+  }
+
+  async function registrarProduccion() {
+    if (!fProdTercero || !fProdProducto.trim() || !fProdCantidad) {
+      alert('Completá persona, producto y cantidad.')
+      return
+    }
+    const { error } = await supabase.from('terceros_registro_produccion').insert({
+      tercero_id: fProdTercero, producto_nombre: fProdProducto.trim(), fecha: fProdFecha,
+      cantidad: parseFloat(fProdCantidad), observacion: fProdObs || null,
+    })
+    if (error) { alert('Error al registrar: ' + error.message); return }
+    resetFormProduccion()
+    fetchAll()
+  }
+
+  async function deleteRegistroProduccion(id: string) {
+    if (!confirm('¿Eliminar este registro de producción?')) return
+    await supabase.from('terceros_registro_produccion').delete().eq('id', id)
+    fetchAll()
+  }
+
+  async function togglePagadoProduccion(reg: any) {
+    await supabase.from('terceros_registro_produccion').update({ pagado: !reg.pagado }).eq('id', reg.id)
+    fetchAll()
+  }
+
+  async function saveRegistroProdFecha(id: string, value: string) {
+    await supabase.from('terceros_registro_produccion').update({ fecha: value }).eq('id', id)
+    setEditingCellProd(null)
+    fetchAll()
+  }
+
+  async function saveRegistroProdProducto(id: string, value: string) {
+    if (!value.trim()) { setEditingCellProd(null); return }
+    await supabase.from('terceros_registro_produccion').update({ producto_nombre: value.trim() }).eq('id', id)
+    setEditingCellProd(null)
+    fetchAll()
+  }
+
+  async function saveRegistroProdCantidad(id: string, value: string) {
+    const cantidad = parseFloat(value || '0')
+    if (!cantidad) { setEditingCellProd(null); return }
+    await supabase.from('terceros_registro_produccion').update({ cantidad }).eq('id', id)
+    setEditingCellProd(null)
+    fetchAll()
+  }
+
+  async function saveRegistroProdObs(id: string, value: string) {
+    await supabase.from('terceros_registro_produccion').update({ observacion: value.trim() || null }).eq('id', id)
+    setEditingCellProd(null)
+    fetchAll()
+  }
+
+  function valorProduccionFor(terceroId: string, productoNombre: string) {
+    const row = valoresProduccion.find((v) => v.tercero_id === terceroId && v.producto_nombre === productoNombre)
+    return row ? Number(row.valor_unidad) : null
+  }
+
+  async function saveValorProduccionExistente(id: string, value: string) {
+    const valor = parseFloat(value || '0')
+    if (!valor) { setEditingValorProd(null); return }
+    await supabase.from('terceros_valores_produccion').update({ valor_unidad: valor }).eq('id', id)
+    setEditingValorProd(null)
+    fetchAll()
+  }
+
+  async function addValorProduccion() {
+    if (!nvpTercero || !nvpProducto.trim() || !nvpValor) { alert('Completá persona, producto y valor.'); return }
+    const { error } = await supabase.from('terceros_valores_produccion').insert({
+      tercero_id: nvpTercero, producto_nombre: nvpProducto.trim(), valor_unidad: parseFloat(nvpValor),
+    })
+    if (error) { alert('Error al agregar (puede que ya exista ese producto para esa persona): ' + error.message); return }
+    setNvpTercero(''); setNvpProducto(''); setNvpValor(''); setShowNewValorProd(false)
+    fetchAll()
+  }
+
+  async function deleteValorProduccion(id: string) {
+    if (!confirm('¿Eliminar este valor por producción?')) return
+    await supabase.from('terceros_valores_produccion').delete().eq('id', id)
+    fetchAll()
+  }
+
   const registrosPorTercero: Record<string, any[]> = {}
   registros.forEach((r) => {
     const nombre = r.terceros?.nombre || 'Sin nombre'
     if (!registrosPorTercero[nombre]) registrosPorTercero[nombre] = []
     registrosPorTercero[nombre].push(r)
+  })
+
+  const registrosProduccionPorTercero: Record<string, any[]> = {}
+  registrosProduccion.forEach((r) => {
+    const nombre = r.terceros?.nombre || 'Sin nombre'
+    if (!registrosProduccionPorTercero[nombre]) registrosProduccionPorTercero[nombre] = []
+    registrosProduccionPorTercero[nombre].push(r)
   })
 
   function totalDelRegistro(r: any) {
@@ -263,12 +381,25 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
     return r.horas * valor
   }
 
+  function totalDelRegistroProduccion(r: any) {
+    if (!mostrarValores) return null
+    const valor = valorProduccionFor(r.tercero_id, r.producto_nombre)
+    if (valor == null) return null
+    return r.cantidad * valor
+  }
+
+  const todosLosNombres = Array.from(new Set([...Object.keys(registrosPorTercero), ...Object.keys(registrosProduccionPorTercero)]))
   const totalGeneralPorTercero: Record<string, { horas: number; total: number; pagado: number; pendiente: number }> = {}
-  Object.entries(registrosPorTercero).forEach(([nombre, regs]) => {
+  todosLosNombres.forEach((nombre) => {
     let horas = 0, total = 0, pagado = 0
-    regs.forEach((r) => {
+    ;(registrosPorTercero[nombre] || []).forEach((r) => {
       horas += r.horas
       const t = totalDelRegistro(r) ?? 0
+      total += t
+      if (r.pagado) pagado += t
+    })
+    ;(registrosProduccionPorTercero[nombre] || []).forEach((r) => {
+      const t = totalDelRegistroProduccion(r) ?? 0
       total += t
       if (r.pagado) pagado += t
     })
@@ -290,47 +421,94 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
       {/* Formulario de registro diario */}
       {canEdit && !mostrarValores && (
         <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 md:p-5 mb-6">
-          <h2 className="font-semibold text-slate-700 mb-3">Registrar horas de hoy</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
-            <select value={fTercero} onChange={(e) => setFTercero(e.target.value)} className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full">
-              <option value="">Persona...</option>
-              {terceros.map((t) => <option key={t.id} value={t.id}>{t.nombre}</option>)}
-            </select>
-            <select value={fProceso} onChange={(e) => setFProceso(e.target.value)} className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full">
-              <option value="">Sector / Proceso...</option>
-              {procesos.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
-            </select>
+          <div className="flex gap-2 mb-4">
+            <button onClick={() => setFModalidad('horas')}
+              className={`text-sm px-3 py-1.5 rounded-md font-medium ${fModalidad === 'horas' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
+              Por horas
+            </button>
+            <button onClick={() => setFModalidad('produccion')}
+              className={`text-sm px-3 py-1.5 rounded-md font-medium ${fModalidad === 'produccion' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
+              Por producción
+            </button>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
-            <div>
-              <label className="text-xs text-slate-500">Fecha</label>
-              <input type="date" value={fFecha} onChange={(e) => setFFecha(e.target.value)}
-                className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1" />
-            </div>
-            <div>
-              <label className="text-xs text-slate-500">Entrada</label>
-              <input type="time" value={fEntrada} onChange={(e) => onEntradaSalidaChange(e.target.value, fSalida)}
-                className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1" />
-            </div>
-            <div>
-              <label className="text-xs text-slate-500">Salida</label>
-              <input type="time" value={fSalida} onChange={(e) => onEntradaSalidaChange(fEntrada, e.target.value)}
-                className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1" />
-            </div>
-            <div>
-              <label className="text-xs text-slate-500">Horas {fEntrada && fSalida ? '(calculado)' : ''}</label>
-              <input type="number" value={fHoras} onChange={(e) => setFHoras(e.target.value)}
-                className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1" />
-            </div>
-          </div>
-          <div className="mb-3">
-            <label className="text-xs text-slate-500">Observación (opcional)</label>
-            <input value={fObs} onChange={(e) => setFObs(e.target.value)}
-              className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1" />
-          </div>
-          <button onClick={registrarHoras} className="bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-700">
-            Registrar
-          </button>
+
+          {fModalidad === 'horas' ? (
+            <>
+              <h2 className="font-semibold text-slate-700 mb-3">Registrar horas de hoy</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+                <select value={fTercero} onChange={(e) => setFTercero(e.target.value)} className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full">
+                  <option value="">Persona...</option>
+                  {terceros.map((t) => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+                </select>
+                <select value={fProceso} onChange={(e) => setFProceso(e.target.value)} className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full">
+                  <option value="">Sector / Proceso...</option>
+                  {procesos.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                <div>
+                  <label className="text-xs text-slate-500">Fecha</label>
+                  <input type="date" value={fFecha} onChange={(e) => setFFecha(e.target.value)}
+                    className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1" />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500">Entrada</label>
+                  <input type="time" value={fEntrada} onChange={(e) => onEntradaSalidaChange(e.target.value, fSalida)}
+                    className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1" />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500">Salida</label>
+                  <input type="time" value={fSalida} onChange={(e) => onEntradaSalidaChange(fEntrada, e.target.value)}
+                    className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1" />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500">Horas {fEntrada && fSalida ? '(calculado)' : ''}</label>
+                  <input type="number" value={fHoras} onChange={(e) => setFHoras(e.target.value)}
+                    className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1" />
+                </div>
+              </div>
+              <div className="mb-3">
+                <label className="text-xs text-slate-500">Observación (opcional)</label>
+                <input value={fObs} onChange={(e) => setFObs(e.target.value)}
+                  className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1" />
+              </div>
+              <button onClick={registrarHoras} className="bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-700">
+                Registrar
+              </button>
+            </>
+          ) : (
+            <>
+              <h2 className="font-semibold text-slate-700 mb-3">Registrar producción de hoy</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+                <select value={fProdTercero} onChange={(e) => setFProdTercero(e.target.value)} className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full">
+                  <option value="">Persona...</option>
+                  {terceros.map((t) => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+                </select>
+                <input placeholder="Producto (ej: Iniciador de fuego)" value={fProdProducto} onChange={(e) => setFProdProducto(e.target.value)}
+                  className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full" />
+              </div>
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="text-xs text-slate-500">Fecha</label>
+                  <input type="date" value={fProdFecha} onChange={(e) => setFProdFecha(e.target.value)}
+                    className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1" />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500">Cantidad entregada</label>
+                  <input type="number" value={fProdCantidad} onChange={(e) => setFProdCantidad(e.target.value)}
+                    className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1" />
+                </div>
+              </div>
+              <div className="mb-3">
+                <label className="text-xs text-slate-500">Observación (opcional)</label>
+                <input value={fProdObs} onChange={(e) => setFProdObs(e.target.value)}
+                  className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1" />
+              </div>
+              <button onClick={registrarProduccion} className="bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-700">
+                Registrar
+              </button>
+            </>
+          )}
         </div>
       )}
 
@@ -416,6 +594,52 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
         </div>
       )}
 
+      {/* Valores por producción: lista (no matriz), porque el producto varía persona a persona */}
+      {mostrarValores && (
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs font-bold text-slate-800 uppercase tracking-wide">Valores por producción ($/unidad)</p>
+            <button onClick={() => setShowNewValorProd(!showNewValorProd)} className="text-xs text-blue-600 hover:underline">+ Agregar</button>
+          </div>
+          {showNewValorProd && (
+            <div className="flex flex-wrap gap-2 mb-3 bg-slate-50 rounded-lg p-2">
+              <select value={nvpTercero} onChange={(e) => setNvpTercero(e.target.value)} className="border border-slate-300 rounded-md px-2 py-1.5 text-xs">
+                <option value="">Persona...</option>
+                {terceros.map((t) => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+              </select>
+              <input placeholder="Producto" value={nvpProducto} onChange={(e) => setNvpProducto(e.target.value)}
+                className="border border-slate-300 rounded-md px-2 py-1.5 text-xs flex-1 min-w-[140px]" />
+              <input placeholder="$/unidad" type="number" value={nvpValor} onChange={(e) => setNvpValor(e.target.value)}
+                className="border border-slate-300 rounded-md px-2 py-1.5 text-xs w-24" />
+              <button onClick={addValorProduccion} className="text-xs bg-slate-700 text-white px-3 rounded-md hover:bg-slate-800">Guardar</button>
+            </div>
+          )}
+          {valoresProduccion.length === 0 ? (
+            <p className="text-xs text-slate-400">Todavía no hay valores por producción definidos.</p>
+          ) : (
+            <div className="space-y-1.5">
+              {valoresProduccion.map((v) => (
+                <div key={v.id} className="flex items-center justify-between text-sm border-b border-slate-50 pb-1.5 last:border-0">
+                  <span className="text-slate-700 font-medium">{v.terceros?.nombre}</span>
+                  <span className="text-slate-500">{v.producto_nombre}</span>
+                  {editingValorProd === v.id ? (
+                    <input type="number" autoFocus defaultValue={v.valor_unidad}
+                      onBlur={(e) => saveValorProduccionExistente(v.id, e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                      className="w-24 text-right rounded-md border border-blue-300 py-0.5 px-1 text-xs" />
+                  ) : (
+                    <button onClick={() => setEditingValorProd(v.id)} className="text-slate-700 font-medium hover:text-blue-600 hover:underline decoration-dotted">
+                      ${Number(v.valor_unidad).toLocaleString('es-AR')}
+                    </button>
+                  )}
+                  <button onClick={() => deleteValorProduccion(v.id)} className="text-xs text-rose-500 hover:underline">Eliminar</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Alta de personas y procesos (colapsado por defecto, no es lo importante del día a día) */}
       {canEdit && (
         <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 mb-6">
@@ -466,14 +690,18 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
 
       {/* Listado de registros */}
       <h2 className="text-xs font-bold text-slate-800 uppercase tracking-wide mb-3">Registros del mes</h2>
-      {Object.keys(registrosPorTercero).length === 0 ? (
+      {todosLosNombres.length === 0 ? (
         <p className="text-slate-400 text-sm">Sin registros este mes.</p>
       ) : (
         <div className="space-y-4">
-          {Object.entries(registrosPorTercero).map(([nombre, regs]) => (
+          {todosLosNombres.map((nombre) => {
+            const regs = registrosPorTercero[nombre] || []
+            const regsProd = registrosProduccionPorTercero[nombre] || []
+            return (
             <div key={nombre} className="bg-white border border-slate-200 rounded-xl shadow-sm p-4">
               <p className="text-sm font-medium text-slate-500 mb-2">{nombre}</p>
-              <div className="overflow-x-auto">
+              {regs.length > 0 && (
+              <div className="overflow-x-auto mb-4">
                 <table className="w-full text-sm border-collapse">
                   <thead>
                     <tr className="text-left text-slate-400 text-xs">
@@ -589,8 +817,99 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
                   </tbody>
                 </table>
               </div>
+              )}
+
+              {regsProd.length > 0 && (
+              <div className="overflow-x-auto">
+                <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Producción</p>
+                <table className="w-full text-sm border-collapse">
+                  <thead>
+                    <tr className="text-left text-slate-400 text-xs">
+                      <th className="py-1">Fecha</th>
+                      <th className="py-1">Producto</th>
+                      <th className="py-1 text-center">Cantidad</th>
+                      {mostrarValores && <th className="py-1 text-right">Total</th>}
+                      {mostrarValores && <th className="py-1 text-center">Pagado</th>}
+                      <th className="py-1">Obs.</th>
+                      <th className="py-1"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {regsProd.map((r) => {
+                      const total = totalDelRegistroProduccion(r)
+                      const isEditingP = (field: string) => editingCellProd?.id === r.id && editingCellProd?.field === field
+                      return (
+                        <tr key={r.id} className="border-t border-slate-100">
+                          <td className="py-2 text-slate-500">
+                            {canEdit && isEditingP('fecha') ? (
+                              <input type="date" autoFocus defaultValue={r.fecha}
+                                onBlur={(e) => saveRegistroProdFecha(r.id, e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                                className="border border-blue-300 rounded-md px-1 py-0.5 text-xs w-28" />
+                            ) : (
+                              <button onClick={() => canEdit && setEditingCellProd({ id: r.id, field: 'fecha' })} disabled={!canEdit}
+                                className={canEdit ? 'hover:underline decoration-dotted' : ''}>
+                                {shortDate(r.fecha)}
+                              </button>
+                            )}
+                          </td>
+                          <td className="py-2 text-slate-700">
+                            {canEdit && isEditingP('producto') ? (
+                              <input autoFocus defaultValue={r.producto_nombre}
+                                onBlur={(e) => saveRegistroProdProducto(r.id, e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                                className="border border-blue-300 rounded-md px-1 py-0.5 text-xs w-40" />
+                            ) : (
+                              <button onClick={() => canEdit && setEditingCellProd({ id: r.id, field: 'producto' })} disabled={!canEdit}
+                                className={canEdit ? 'hover:underline decoration-dotted' : ''}>
+                                {r.producto_nombre}
+                              </button>
+                            )}
+                          </td>
+                          <td className="py-2 text-center font-medium text-slate-700">
+                            {canEdit && isEditingP('cantidad') ? (
+                              <input type="number" autoFocus defaultValue={r.cantidad}
+                                onBlur={(e) => saveRegistroProdCantidad(r.id, e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                                className="border border-blue-300 rounded-md px-1 py-0.5 text-xs w-16 text-center" />
+                            ) : (
+                              <button onClick={() => canEdit && setEditingCellProd({ id: r.id, field: 'cantidad' })} disabled={!canEdit}
+                                className={canEdit ? 'hover:underline decoration-dotted' : ''}>
+                                {r.cantidad}
+                              </button>
+                            )}
+                          </td>
+                          {mostrarValores && <td className="py-2 text-right text-slate-700">{total != null ? `$${total.toLocaleString('es-AR')}` : '—'}</td>}
+                          {mostrarValores && (
+                            <td className="py-2 text-center">
+                              <input type="checkbox" checked={r.pagado} onChange={() => togglePagadoProduccion(r)} className="w-4 h-4 accent-emerald-600" />
+                            </td>
+                          )}
+                          <td className="py-2 text-slate-500 italic">
+                            {canEdit && isEditingP('obs') ? (
+                              <input autoFocus defaultValue={r.observacion || ''}
+                                onBlur={(e) => saveRegistroProdObs(r.id, e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                                placeholder="Obs." className="border border-blue-300 rounded-md px-1 py-0.5 text-xs w-32" />
+                            ) : (
+                              <button onClick={() => canEdit && setEditingCellProd({ id: r.id, field: 'obs' })} disabled={!canEdit}
+                                className={canEdit ? 'hover:underline decoration-dotted' : ''}>
+                                {r.observacion || (canEdit ? '+ obs.' : '—')}
+                              </button>
+                            )}
+                          </td>
+                          <td className="py-2 text-right">
+                            {canEdit && <button onClick={() => deleteRegistroProduccion(r.id)} className="text-xs text-rose-500 hover:underline">Eliminar</button>}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              )}
             </div>
-          ))}
+          )})}
         </div>
       )}
     </div>
