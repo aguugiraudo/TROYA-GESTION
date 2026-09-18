@@ -337,7 +337,7 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
       {/* Resumen del mes primero (lo más importante de un vistazo), en tabla prolija */}
       {mostrarValores && Object.keys(totalGeneralPorTercero).length > 0 && (
         <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 mb-6 overflow-x-auto">
-          <p className="text-sm font-semibold text-slate-700 mb-3">Resumen del mes</p>
+          <p className="text-xs font-bold text-slate-800 uppercase tracking-wide mb-3">Resumen del mes</p>
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="text-left text-slate-400 text-xs border-b border-slate-200">
@@ -363,9 +363,9 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
             </tbody>
           </table>
           {externaResumen && (
-            <div className="mt-3 pt-3 border-t border-slate-200 flex items-center justify-between text-sm">
-              <span className="text-slate-700 font-medium">+ Tercerización externa (envíos del mes)</span>
-              <span className="text-slate-700">${externaTotal.toLocaleString('es-AR')}</span>
+            <div className="mt-4 flex items-center justify-between text-sm bg-slate-50 rounded-lg px-3 py-2.5">
+              <span className="text-slate-600">+ Tercerización externa (envíos del mes)</span>
+              <span className="text-slate-800 font-semibold">${externaTotal.toLocaleString('es-AR')}</span>
             </div>
           )}
         </div>
@@ -374,7 +374,7 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
       {/* Valores hora, después del resumen — es configuración, no lo primero que hay que mirar */}
       {mostrarValores && terceros.length > 0 && procesos.length > 0 && (
         <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 mb-6 overflow-x-auto">
-          <p className="text-sm font-semibold text-slate-700 mb-3">Valores hora ($/hora)</p>
+          <p className="text-xs font-bold text-slate-800 uppercase tracking-wide mb-3">Valores hora ($/hora)</p>
           <table className="text-sm border-collapse">
             <thead>
               <tr className="text-left text-slate-400 text-xs">
@@ -396,9 +396,14 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
                             onBlur={(e) => saveValorHora(t.id, p.id, e.target.value)}
                             onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
                             className="w-20 text-center rounded-md border border-blue-300 py-0.5 text-xs" />
+                        ) : valor != null ? (
+                          <button onClick={() => setEditingValor(key)} className="text-slate-700 font-medium hover:text-blue-600 hover:underline decoration-dotted">
+                            ${valor.toLocaleString('es-AR')}
+                          </button>
                         ) : (
-                          <button onClick={() => setEditingValor(key)} className="hover:underline decoration-dotted text-slate-600">
-                            {valor != null ? `$${valor.toLocaleString('es-AR')}` : '+ definir'}
+                          <button onClick={() => setEditingValor(key)}
+                            className="text-[11px] text-slate-400 border border-dashed border-slate-300 rounded-md px-2 py-0.5 hover:border-blue-300 hover:text-blue-600 transition-colors">
+                            + definir
                           </button>
                         )}
                       </td>
@@ -460,14 +465,14 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
       )}
 
       {/* Listado de registros */}
-      <h2 className="font-semibold text-slate-700 mb-3">Registros del mes</h2>
+      <h2 className="text-xs font-bold text-slate-800 uppercase tracking-wide mb-3">Registros del mes</h2>
       {Object.keys(registrosPorTercero).length === 0 ? (
         <p className="text-slate-400 text-sm">Sin registros este mes.</p>
       ) : (
         <div className="space-y-4">
           {Object.entries(registrosPorTercero).map(([nombre, regs]) => (
             <div key={nombre} className="bg-white border border-slate-200 rounded-xl shadow-sm p-4">
-              <p className="font-semibold text-slate-700 mb-2">{nombre}</p>
+              <p className="text-sm font-medium text-slate-500 mb-2">{nombre}</p>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm border-collapse">
                   <thead>
