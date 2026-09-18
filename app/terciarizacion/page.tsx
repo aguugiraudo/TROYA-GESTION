@@ -702,7 +702,18 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
               <p className="text-sm font-medium text-slate-500 mb-2">{nombre}</p>
               {regs.length > 0 && (
               <div className="overflow-x-auto mb-4">
-                <table className="w-full text-sm border-collapse">
+                <table className="w-full text-sm border-collapse table-fixed">
+                  <colgroup>
+                    <col style={{ width: '90px' }} />
+                    <col style={{ width: '120px' }} />
+                    <col style={{ width: '70px' }} />
+                    <col style={{ width: '70px' }} />
+                    <col style={{ width: '60px' }} />
+                    {mostrarValores && <col style={{ width: '90px' }} />}
+                    {mostrarValores && <col style={{ width: '60px' }} />}
+                    <col />
+                    <col style={{ width: '70px' }} />
+                  </colgroup>
                   <thead>
                     <tr className="text-left text-slate-400 text-xs">
                       <th className="py-1">Fecha</th>
@@ -822,7 +833,16 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
               {regsProd.length > 0 && (
               <div className="overflow-x-auto">
                 <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Producción</p>
-                <table className="w-full text-sm border-collapse">
+                <table className="w-full text-sm border-collapse table-fixed">
+                  <colgroup>
+                    <col style={{ width: '90px' }} />
+                    <col style={{ width: '150px' }} />
+                    <col style={{ width: '70px' }} />
+                    {mostrarValores && <col style={{ width: '90px' }} />}
+                    {mostrarValores && <col style={{ width: '60px' }} />}
+                    <col />
+                    <col style={{ width: '70px' }} />
+                  </colgroup>
                   <thead>
                     <tr className="text-left text-slate-400 text-xs">
                       <th className="py-1">Fecha</th>
@@ -941,6 +961,7 @@ function Externa({ canEdit }: { canEdit: boolean }) {
   const [fNotas, setFNotas] = useState('')
 
   const [recibirModal, setRecibirModal] = useState<any | null>(null)
+  const [detalleModal, setDetalleModal] = useState<any | null>(null)
   const [recibirCantidad, setRecibirCantidad] = useState('')
   const [recibirFecha, setRecibirFecha] = useState(today())
 
@@ -1137,12 +1158,15 @@ function Externa({ canEdit }: { canEdit: boolean }) {
                         <td className="p-3 text-center text-slate-500">{recibido || '—'}</td>
                         <td className="p-3 text-center text-amber-600 font-semibold">{pendiente}</td>
                         <td className="p-3 text-right">
-                          {canEdit && (
-                            <div className="flex items-center justify-end gap-3">
-                              <button onClick={() => openRecibir(t)} className="text-xs text-emerald-600 hover:underline font-medium">Registrar entrega</button>
-                              <button onClick={() => eliminarTercerizacion(t.id)} className="text-xs text-rose-500 hover:underline">Eliminar</button>
-                            </div>
-                          )}
+                          <div className="flex items-center justify-end gap-3">
+                            <button onClick={() => setDetalleModal(t)} className="text-xs text-slate-500 hover:underline">Ver detalle</button>
+                            {canEdit && (
+                              <>
+                                <button onClick={() => openRecibir(t)} className="text-xs text-emerald-600 hover:underline font-medium">Registrar entrega</button>
+                                <button onClick={() => eliminarTercerizacion(t.id)} className="text-xs text-rose-500 hover:underline">Eliminar</button>
+                              </>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     )
@@ -1280,6 +1304,76 @@ function Externa({ canEdit }: { canEdit: boolean }) {
             </div>
           )}
         </>
+      )}
+
+      {detalleModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setDetalleModal(null)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-start mb-4">
+              <div>
+                <h3 className="font-semibold text-slate-800 text-lg">{detalleModal.proveedor_nombre}</h3>
+                <p className="text-sm text-slate-500">
+                  #{detalleModal.orders?.order_number} — {detalleModal.orders?.products?.name}
+                </p>
+              </div>
+              <button onClick={() => setDetalleModal(null)} className="text-slate-400 hover:text-slate-600 text-lg leading-none">✕</button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <div className="bg-slate-50 rounded-lg p-3">
+                <p className="text-xs text-slate-400">Sector</p>
+                <p className="text-sm font-medium text-slate-700">{detalleModal.sectors?.name}{detalleModal.components?.name ? ` — ${detalleModal.components.name}` : ''}</p>
+              </div>
+              <div className="bg-slate-50 rounded-lg p-3">
+                <p className="text-xs text-slate-400">Fecha de envío</p>
+                <p className="text-sm font-medium text-slate-700">{shortDate(detalleModal.fecha_envio)}</p>
+              </div>
+              <div className="bg-slate-50 rounded-lg p-3">
+                <p className="text-xs text-slate-400">Cantidad enviada</p>
+                <p className="text-sm font-medium text-slate-700">{detalleModal.cantidad_enviada}</p>
+              </div>
+              <div className="bg-slate-50 rounded-lg p-3">
+                <p className="text-xs text-slate-400">Precio por unidad</p>
+                <p className="text-sm font-medium text-slate-700">
+                  {detalleModal.precio_unitario != null ? `$${Number(detalleModal.precio_unitario).toLocaleString('es-AR')}` : '—'}
+                </p>
+              </div>
+              <div className="col-span-2 bg-emerald-50 rounded-lg p-3">
+                <p className="text-xs text-emerald-600">Valor total del envío</p>
+                <p className="text-lg font-semibold text-emerald-700">
+                  {detalleModal.precio_unitario != null
+                    ? `$${(detalleModal.cantidad_enviada * detalleModal.precio_unitario).toLocaleString('es-AR')}`
+                    : '—'}
+                </p>
+              </div>
+            </div>
+
+            {detalleModal.notas && (
+              <div className="mb-4">
+                <p className="text-xs text-slate-400 mb-1">Notas</p>
+                <p className="text-sm text-slate-600 italic bg-slate-50 rounded-lg p-3">{detalleModal.notas}</p>
+              </div>
+            )}
+
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Historial de entregas</p>
+            {recepciones.filter((r) => r.tercerizacion_id === detalleModal.id).length === 0 ? (
+              <p className="text-sm text-slate-400">Todavía no se recibió nada de este envío.</p>
+            ) : (
+              <div className="space-y-1.5">
+                {recepciones.filter((r) => r.tercerizacion_id === detalleModal.id).map((r) => (
+                  <div key={r.id} className="flex items-center justify-between text-sm bg-slate-50 rounded-lg px-3 py-2">
+                    <span className="text-slate-500">{shortDate(r.fecha)}</span>
+                    <span className="text-slate-700 font-medium">{r.cantidad_recibida} u.</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <button onClick={() => setDetalleModal(null)} className="mt-5 w-full bg-slate-800 text-white rounded-md py-2 text-sm font-medium hover:bg-slate-900">
+              Cerrar
+            </button>
+          </div>
+        </div>
       )}
 
       {recibirModal && (
