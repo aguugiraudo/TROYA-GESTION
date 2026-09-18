@@ -52,10 +52,12 @@ export default function TerciarizacionPage() {
           className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${subTab === 'manoDeObra' ? 'border-slate-800 text-slate-800' : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
           Mano de Obra Tercerizada
         </button>
-        <button onClick={() => setSubTab('externa')}
-          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${subTab === 'externa' ? 'border-slate-800 text-slate-800' : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
-          Tercerización Externa
-        </button>
+        {canSeeValores && (
+          <button onClick={() => setSubTab('externa')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${subTab === 'externa' ? 'border-slate-800 text-slate-800' : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
+            Tercerización Externa
+          </button>
+        )}
         {canSeeValores && (
           <button onClick={() => setSubTab('datos')}
             className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${subTab === 'datos' ? 'border-slate-800 text-slate-800' : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
@@ -65,7 +67,7 @@ export default function TerciarizacionPage() {
       </div>
 
       {subTab === 'manoDeObra' && <ManoDeObra canEdit={canEdit} mostrarValores={false} />}
-      {subTab === 'externa' && <Externa canEdit={canEdit} />}
+      {subTab === 'externa' && canSeeValores && <Externa canEdit={canEdit} />}
       {subTab === 'datos' && canSeeValores && <ManoDeObra canEdit={canEdit} mostrarValores={true} externaResumen />}
     </main>
   )
@@ -97,6 +99,8 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
   const [fObs, setFObs] = useState('')
 
   const [editingValor, setEditingValor] = useState<string | null>(null)
+  const [editingCell, setEditingCell] = useState<{ id: string; field: 'fecha' | 'proceso' | 'entrada' | 'salida' | 'horas' | 'obs' } | null>(null)
+  const [showGestion, setShowGestion] = useState(false)
 
   const [externaTotal, setExternaTotal] = useState(0)
 
@@ -179,6 +183,43 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
     fetchAll()
   }
 
+  async function saveRegistroFecha(id: string, value: string) {
+    await supabase.from('terceros_registro_horas').update({ fecha: value }).eq('id', id)
+    setEditingCell(null)
+    fetchAll()
+  }
+
+  async function saveRegistroProceso(id: string, procesoId: string) {
+    await supabase.from('terceros_registro_horas').update({ proceso_id: procesoId }).eq('id', id)
+    setEditingCell(null)
+    fetchAll()
+  }
+
+  async function saveRegistroEntradaSalida(reg: any, entrada: string, salida: string) {
+    const update: any = { hora_entrada: entrada || null, hora_salida: salida || null }
+    if (entrada && salida) {
+      const h = horasEntreHorarios(entrada, salida)
+      if (h != null) update.horas = h
+    }
+    await supabase.from('terceros_registro_horas').update(update).eq('id', reg.id)
+    setEditingCell(null)
+    fetchAll()
+  }
+
+  async function saveRegistroHoras(id: string, value: string) {
+    const horas = parseFloat(value || '0')
+    if (!horas) { setEditingCell(null); return }
+    await supabase.from('terceros_registro_horas').update({ horas }).eq('id', id)
+    setEditingCell(null)
+    fetchAll()
+  }
+
+  async function saveRegistroObs(id: string, value: string) {
+    await supabase.from('terceros_registro_horas').update({ observacion: value.trim() || null }).eq('id', id)
+    setEditingCell(null)
+    fetchAll()
+  }
+
   async function deleteRegistro(id: string) {
     if (!confirm('¿Eliminar este registro de horas?')) return
     await supabase.from('terceros_registro_horas').delete().eq('id', id)
@@ -246,48 +287,6 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
         </div>
       )}
 
-      {/* Alta de personas y procesos */}
-      {canEdit && (
-        <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-sm font-semibold text-slate-700">Personas</p>
-                <button onClick={() => setShowNewTercero(!showNewTercero)} className="text-xs text-blue-600 hover:underline">+ Agregar</button>
-              </div>
-              {showNewTercero && (
-                <div className="flex gap-2 mb-2">
-                  <input value={newTerceroName} onChange={(e) => setNewTerceroName(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') addTercero() }}
-                    placeholder="Nombre y apellido" className="border border-slate-300 rounded-md px-2 py-1.5 text-sm flex-1" />
-                  <button onClick={addTercero} className="text-xs bg-slate-700 text-white px-3 rounded-md hover:bg-slate-800">Agregar</button>
-                </div>
-              )}
-              <div className="flex flex-wrap gap-1.5">
-                {terceros.map((t) => <span key={t.id} className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-full">{t.nombre}</span>)}
-              </div>
-            </div>
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-sm font-semibold text-slate-700">Sectores / Procesos</p>
-                <button onClick={() => setShowNewProceso(!showNewProceso)} className="text-xs text-blue-600 hover:underline">+ Agregar</button>
-              </div>
-              {showNewProceso && (
-                <div className="flex gap-2 mb-2">
-                  <input value={newProcesoName} onChange={(e) => setNewProcesoName(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') addProceso() }}
-                    placeholder="Ej: Soldadura, General, Diseño" className="border border-slate-300 rounded-md px-2 py-1.5 text-sm flex-1" />
-                  <button onClick={addProceso} className="text-xs bg-slate-700 text-white px-3 rounded-md hover:bg-slate-800">Agregar</button>
-                </div>
-              )}
-              <div className="flex flex-wrap gap-1.5">
-                {procesos.map((p) => <span key={p.id} className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-full">{p.nombre}</span>)}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Formulario de registro diario */}
       {canEdit && !mostrarValores && (
         <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 md:p-5 mb-6">
@@ -335,7 +334,44 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
         </div>
       )}
 
-      {/* Tabla de valores hora (solo Datos) */}
+      {/* Resumen del mes primero (lo más importante de un vistazo), en tabla prolija */}
+      {mostrarValores && Object.keys(totalGeneralPorTercero).length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 mb-6 overflow-x-auto">
+          <p className="text-sm font-semibold text-slate-700 mb-3">Resumen del mes</p>
+          <table className="w-full text-sm border-collapse">
+            <thead>
+              <tr className="text-left text-slate-400 text-xs border-b border-slate-200">
+                <th className="pb-2">Persona</th>
+                <th className="pb-2 text-center">Horas</th>
+                <th className="pb-2 text-right">Total generado</th>
+                <th className="pb-2 text-right">Pagado</th>
+                <th className="pb-2 text-right">Pendiente</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(totalGeneralPorTercero).map(([nombre, info]) => (
+                <tr key={nombre} className="border-b border-slate-50 last:border-0">
+                  <td className="py-2 font-medium text-slate-700">{nombre}</td>
+                  <td className="py-2 text-center text-slate-500">{info.horas}</td>
+                  <td className="py-2 text-right text-slate-700">${info.total.toLocaleString('es-AR')}</td>
+                  <td className="py-2 text-right text-emerald-600">${info.pagado.toLocaleString('es-AR')}</td>
+                  <td className={`py-2 text-right font-semibold ${info.pendiente > 0 ? 'text-rose-600' : 'text-slate-400'}`}>
+                    ${info.pendiente.toLocaleString('es-AR')}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {externaResumen && (
+            <div className="mt-3 pt-3 border-t border-slate-200 flex items-center justify-between text-sm">
+              <span className="text-slate-700 font-medium">+ Tercerización externa (envíos del mes)</span>
+              <span className="text-slate-700">${externaTotal.toLocaleString('es-AR')}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Valores hora, después del resumen — es configuración, no lo primero que hay que mirar */}
       {mostrarValores && terceros.length > 0 && procesos.length > 0 && (
         <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 mb-6 overflow-x-auto">
           <p className="text-sm font-semibold text-slate-700 mb-3">Valores hora ($/hora)</p>
@@ -375,28 +411,50 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
         </div>
       )}
 
-      {/* Resumen por persona (solo Datos) */}
-      {mostrarValores && Object.keys(totalGeneralPorTercero).length > 0 && (
+      {/* Alta de personas y procesos (colapsado por defecto, no es lo importante del día a día) */}
+      {canEdit && (
         <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 mb-6">
-          <p className="text-sm font-semibold text-slate-700 mb-3">Resumen del mes</p>
-          <div className="space-y-2">
-            {Object.entries(totalGeneralPorTercero).map(([nombre, info]) => (
-              <div key={nombre} className="flex items-center justify-between text-sm border-b border-slate-100 pb-2 last:border-0">
-                <span className="text-slate-700 font-medium">{nombre}</span>
-                <span className="text-slate-500">{info.horas} hs</span>
-                <span className="text-slate-700">${info.total.toLocaleString('es-AR')}</span>
-                <span className="text-emerald-600">Pagado: ${info.pagado.toLocaleString('es-AR')}</span>
-                <span className={info.pendiente > 0 ? 'text-rose-600 font-semibold' : 'text-slate-400'}>
-                  Pendiente: ${info.pendiente.toLocaleString('es-AR')}
-                </span>
+          <button onClick={() => setShowGestion(!showGestion)} className="text-sm font-medium text-slate-600 hover:text-slate-800 flex items-center gap-1.5">
+            Gestionar personas y sectores
+            <span className={`text-xs transition-transform ${showGestion ? 'rotate-180' : ''}`}>▾</span>
+          </button>
+          {showGestion && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-sm font-semibold text-slate-700">Personas</p>
+                <button onClick={() => setShowNewTercero(!showNewTercero)} className="text-xs text-blue-600 hover:underline">+ Agregar</button>
               </div>
-            ))}
-          </div>
-          {externaResumen && (
-            <div className="mt-3 pt-3 border-t border-slate-200 flex items-center justify-between text-sm">
-              <span className="text-slate-700 font-medium">+ Tercerización externa (envíos del mes)</span>
-              <span className="text-slate-700">${externaTotal.toLocaleString('es-AR')}</span>
+              {showNewTercero && (
+                <div className="flex gap-2 mb-2">
+                  <input value={newTerceroName} onChange={(e) => setNewTerceroName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') addTercero() }}
+                    placeholder="Nombre y apellido" className="border border-slate-300 rounded-md px-2 py-1.5 text-sm flex-1" />
+                  <button onClick={addTercero} className="text-xs bg-slate-700 text-white px-3 rounded-md hover:bg-slate-800">Agregar</button>
+                </div>
+              )}
+              <div className="flex flex-wrap gap-1.5">
+                {terceros.map((t) => <span key={t.id} className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-full">{t.nombre}</span>)}
+              </div>
             </div>
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-sm font-semibold text-slate-700">Sectores / Procesos</p>
+                <button onClick={() => setShowNewProceso(!showNewProceso)} className="text-xs text-blue-600 hover:underline">+ Agregar</button>
+              </div>
+              {showNewProceso && (
+                <div className="flex gap-2 mb-2">
+                  <input value={newProcesoName} onChange={(e) => setNewProcesoName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') addProceso() }}
+                    placeholder="Ej: Soldadura, General, Diseño" className="border border-slate-300 rounded-md px-2 py-1.5 text-sm flex-1" />
+                  <button onClick={addProceso} className="text-xs bg-slate-700 text-white px-3 rounded-md hover:bg-slate-800">Agregar</button>
+                </div>
+              )}
+              <div className="flex flex-wrap gap-1.5">
+                {procesos.map((p) => <span key={p.id} className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-full">{p.nombre}</span>)}
+              </div>
+            </div>
+          </div>
           )}
         </div>
       )}
@@ -428,20 +486,95 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
                   <tbody>
                     {regs.map((r) => {
                       const total = totalDelRegistro(r)
+                      const isEditing = (field: string) => editingCell?.id === r.id && editingCell?.field === field
                       return (
                         <tr key={r.id} className="border-t border-slate-100">
-                          <td className="py-2 text-slate-500">{shortDate(r.fecha)}</td>
-                          <td className="py-2 text-slate-700">{r.terceros_procesos?.nombre}</td>
-                          <td className="py-2 text-center text-slate-500">{r.hora_entrada ? r.hora_entrada.slice(0, 5) : '—'}</td>
-                          <td className="py-2 text-center text-slate-500">{r.hora_salida ? r.hora_salida.slice(0, 5) : '—'}</td>
-                          <td className="py-2 text-center font-medium text-slate-700">{r.horas}</td>
+                          <td className="py-2 text-slate-500">
+                            {canEdit && isEditing('fecha') ? (
+                              <input type="date" autoFocus defaultValue={r.fecha}
+                                onBlur={(e) => saveRegistroFecha(r.id, e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                                className="border border-blue-300 rounded-md px-1 py-0.5 text-xs w-28" />
+                            ) : (
+                              <button onClick={() => canEdit && setEditingCell({ id: r.id, field: 'fecha' })} disabled={!canEdit}
+                                className={canEdit ? 'hover:underline decoration-dotted' : ''}>
+                                {shortDate(r.fecha)}
+                              </button>
+                            )}
+                          </td>
+                          <td className="py-2 text-slate-700">
+                            {canEdit && isEditing('proceso') ? (
+                              <select autoFocus defaultValue={r.proceso_id}
+                                onChange={(e) => saveRegistroProceso(r.id, e.target.value)}
+                                onBlur={() => setEditingCell(null)}
+                                className="border border-blue-300 rounded-md px-1 py-0.5 text-xs">
+                                {procesos.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+                              </select>
+                            ) : (
+                              <button onClick={() => canEdit && setEditingCell({ id: r.id, field: 'proceso' })} disabled={!canEdit}
+                                className={canEdit ? 'hover:underline decoration-dotted' : ''}>
+                                {r.terceros_procesos?.nombre}
+                              </button>
+                            )}
+                          </td>
+                          <td className="py-2 text-center text-slate-500">
+                            {canEdit && isEditing('entrada') ? (
+                              <input type="time" autoFocus defaultValue={r.hora_entrada ? r.hora_entrada.slice(0, 5) : ''}
+                                onBlur={(e) => saveRegistroEntradaSalida(r, e.target.value, r.hora_salida ? r.hora_salida.slice(0, 5) : '')}
+                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                                className="border border-blue-300 rounded-md px-1 py-0.5 text-xs w-24" />
+                            ) : (
+                              <button onClick={() => canEdit && setEditingCell({ id: r.id, field: 'entrada' })} disabled={!canEdit}
+                                className={canEdit ? 'hover:underline decoration-dotted' : ''}>
+                                {r.hora_entrada ? r.hora_entrada.slice(0, 5) : '—'}
+                              </button>
+                            )}
+                          </td>
+                          <td className="py-2 text-center text-slate-500">
+                            {canEdit && isEditing('salida') ? (
+                              <input type="time" autoFocus defaultValue={r.hora_salida ? r.hora_salida.slice(0, 5) : ''}
+                                onBlur={(e) => saveRegistroEntradaSalida(r, r.hora_entrada ? r.hora_entrada.slice(0, 5) : '', e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                                className="border border-blue-300 rounded-md px-1 py-0.5 text-xs w-24" />
+                            ) : (
+                              <button onClick={() => canEdit && setEditingCell({ id: r.id, field: 'salida' })} disabled={!canEdit}
+                                className={canEdit ? 'hover:underline decoration-dotted' : ''}>
+                                {r.hora_salida ? r.hora_salida.slice(0, 5) : '—'}
+                              </button>
+                            )}
+                          </td>
+                          <td className="py-2 text-center font-medium text-slate-700">
+                            {canEdit && isEditing('horas') ? (
+                              <input type="number" autoFocus defaultValue={r.horas}
+                                onBlur={(e) => saveRegistroHoras(r.id, e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                                className="border border-blue-300 rounded-md px-1 py-0.5 text-xs w-16 text-center" />
+                            ) : (
+                              <button onClick={() => canEdit && setEditingCell({ id: r.id, field: 'horas' })} disabled={!canEdit}
+                                className={canEdit ? 'hover:underline decoration-dotted' : ''}>
+                                {r.horas}
+                              </button>
+                            )}
+                          </td>
                           {mostrarValores && <td className="py-2 text-right text-slate-700">{total != null ? `$${total.toLocaleString('es-AR')}` : '—'}</td>}
                           {mostrarValores && (
                             <td className="py-2 text-center">
                               <input type="checkbox" checked={r.pagado} onChange={() => togglePagado(r)} className="w-4 h-4 accent-emerald-600" />
                             </td>
                           )}
-                          <td className="py-2 text-slate-500 italic">{r.observacion || '—'}</td>
+                          <td className="py-2 text-slate-500 italic">
+                            {canEdit && isEditing('obs') ? (
+                              <input autoFocus defaultValue={r.observacion || ''}
+                                onBlur={(e) => saveRegistroObs(r.id, e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                                placeholder="Obs." className="border border-blue-300 rounded-md px-1 py-0.5 text-xs w-32" />
+                            ) : (
+                              <button onClick={() => canEdit && setEditingCell({ id: r.id, field: 'obs' })} disabled={!canEdit}
+                                className={canEdit ? 'hover:underline decoration-dotted' : ''}>
+                                {r.observacion || (canEdit ? '+ obs.' : '—')}
+                              </button>
+                            )}
+                          </td>
                           <td className="py-2 text-right">
                             {canEdit && <button onClick={() => deleteRegistro(r.id)} className="text-xs text-rose-500 hover:underline">Eliminar</button>}
                           </td>
