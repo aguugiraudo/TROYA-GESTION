@@ -16,7 +16,7 @@ function shortDate(iso: string) {
   return iso.split('-').reverse().join('/')
 }
 
-type Tab = 'stock' | 'ingresos' | 'egresos'
+type Tab = 'stock' | 'ingresos' | 'egresos' | 'inventario'
 
 export default function InsumosPage() {
   const { role } = useAuth()
@@ -58,6 +58,10 @@ export default function InsumosPage() {
   const [outOperatorId, setOutOperatorId] = useState('')
   const [outFecha, setOutFecha] = useState(today())
   const [outMotivo, setOutMotivo] = useState('')
+
+  // --- Inventario ---
+  const [invCounts, setInvCounts] = useState<Record<string, string>>({})
+  const [invSavedDiffs, setInvSavedDiffs] = useState<Record<string, number>>({})
 
   // --- Historial por ítem (modal) ---
   const [historyItem, setHistoryItem] = useState<any | null>(null)
@@ -250,6 +254,42 @@ export default function InsumosPage() {
     fetchAll()
   }
 
+  function updateInvCount(itemId: string, value: string) {
+    setInvCounts((prev) => ({ ...prev, [itemId]: value }))
+  }
+
+  // Guarda el ajuste de UN ítem: calcula la diferencia contra el stock actual y genera
+  // el movimiento correspondiente (ingreso si contó de más, egreso si contó de menos)
+  async function saveInventoryAdjustment(item: any) {
+    const contadoInput = invCounts[item.id]
+    if (contadoInput === undefined || contadoInput === '') return
+    const contado = parseFloat(contadoInput)
+    const stockActual = stockByItem[item.id] || 0
+    const diferencia = contado - stockActual
+    if (diferencia !== 0) {
+      const { error } = await supabase.from('insumo_movimientos').insert({
+        insumo_id: item.id,
+        tipo: diferencia > 0 ? 'ingreso' : 'egreso',
+        cantidad: Math.abs(diferencia),
+        origen: 'ajuste_inventario',
+        motivo: `Control físico: contado ${contado} ${item.unidad_medida} (teórico ${stockActual})`,
+        fecha: today(),
+      })
+      if (error) { alert('Error al guardar el ajuste de ' + item.nombre + ': ' + error.message); return }
+    }
+    setInvSavedDiffs((prev) => ({ ...prev, [item.id]: diferencia }))
+    fetchAll()
+  }
+
+  async function saveAllInventoryAdjustments() {
+    const toSave = items.filter((it) => invCounts[it.id] !== undefined && invCounts[it.id] !== '')
+    if (toSave.length === 0) { alert('No cargaste ningún conteo todavía.'); return }
+    if (!confirm(`¿Guardar el ajuste de ${toSave.length} ítem(s)?`)) return
+    for (const it of toSave) {
+      await saveInventoryAdjustment(it)
+    }
+  }
+
   const itemsByCategoria: Record<string, any[]> = {}
   const sinCategoria: any[] = []
   items.forEach((it) => {
@@ -283,6 +323,7 @@ export default function InsumosPage() {
           ['stock', 'Stock'],
           ['ingresos', 'Ingresos'],
           ['egresos', 'Egresos'],
+          ['inventario', 'Inventario'],
         ] as [Tab, string][]).map(([key, label]) => (
           <button
             key={key}
@@ -509,6 +550,80 @@ export default function InsumosPage() {
 
           <h2 className="font-semibold text-slate-700 mb-3">Últimos egresos</h2>
           <MovimientosTable rows={egresos} canEdit={canEdit} onDelete={deleteMovimiento} />
+        </>
+      )}
+
+      {/* ===================== PESTAÑA INVENTARIO ===================== */}
+      {tab === 'inventario' && (
+        <>
+          <p className="text-xs text-slate-400 mb-4">
+            Contá lo que hay físicamente y tipealo acá — la diferencia contra el stock que dice el sistema se guarda sola como ajuste, no hace falta calcular nada a mano.
+          </p>
+
+          {items.length === 0 ? (
+            <p className="text-slate-400 text-sm">Todavía no cargaste ningún ítem.</p>
+          ) : (
+            <>
+              {canEdit && (
+                <div className="flex justify-end mb-3">
+                  <button onClick={saveAllInventoryAdjustments} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md hover:bg-emerald-700">
+                    Guardar todos los conteos
+                  </button>
+                </div>
+              )}
+              <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm bg-white">
+                <table className="w-full text-sm border-collapse">
+                  <thead>
+                    <tr className="bg-slate-900 text-white text-left">
+                      <th className="p-3 font-medium">Código</th>
+                      <th className="p-3 font-medium">Ítem</th>
+                      <th className="p-3 font-medium text-center">Stock teórico</th>
+                      <th className="p-3 font-medium text-center">Contado</th>
+                      <th className="p-3 font-medium text-center">Diferencia</th>
+                      <th className="p-3 font-medium"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map((it) => {
+                      const stockTeorico = stockByItem[it.id] || 0
+                      const contadoInput = invCounts[it.id] ?? ''
+                      const contadoNum = contadoInput !== '' ? parseFloat(contadoInput) : null
+                      const diferencia = contadoNum != null ? Math.round((contadoNum - stockTeorico) * 100) / 100 : null
+                      const yaGuardado = invSavedDiffs[it.id] !== undefined
+                      return (
+                        <tr key={it.id} className="border-t border-slate-100">
+                          <td className="p-3 text-slate-400 text-xs">{it.codigo || '—'}</td>
+                          <td className="p-3 text-slate-700 font-medium">{it.nombre}</td>
+                          <td className="p-3 text-center text-slate-500">{stockTeorico} {it.unidad_medida}</td>
+                          <td className="p-3 text-center">
+                            <input
+                              type="number" value={contadoInput}
+                              onChange={(e) => updateInvCount(it.id, e.target.value)}
+                              disabled={!canEdit}
+                              placeholder="—"
+                              className="w-20 text-center rounded-md border border-slate-300 py-1 disabled:bg-slate-50"
+                            />
+                          </td>
+                          <td className={`p-3 text-center font-semibold ${
+                            diferencia == null ? 'text-slate-300' : diferencia === 0 ? 'text-emerald-600' : diferencia > 0 ? 'text-blue-600' : 'text-rose-600'
+                          }`}>
+                            {diferencia != null ? (diferencia > 0 ? `+${diferencia}` : diferencia) : '—'}
+                          </td>
+                          <td className="p-3 text-right">
+                            {canEdit && contadoInput !== '' && (
+                              <button onClick={() => saveInventoryAdjustment(it)} className="text-xs text-blue-600 hover:underline">
+                                {yaGuardado ? 'Reguardar' : 'Guardar'}
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </>
       )}
 
