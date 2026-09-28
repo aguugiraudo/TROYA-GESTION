@@ -90,7 +90,7 @@ export default function PlanDiarioPage() {
 
     const { data: activeOrders } = await supabase
       .from('orders')
-      .select('id, order_number, status, completed_at, lot_quantity, products(name)')
+      .select('id, order_number, status, completed_at, lot_quantity, client_name, products(name)')
       .in('status', ['pending', 'in_progress'])
       .order('priority_rank', { ascending: true, nullsFirst: false })
 
@@ -102,7 +102,7 @@ export default function PlanDiarioPage() {
     if (missingIds.length > 0) {
       const { data } = await supabase
         .from('orders')
-        .select('id, order_number, status, completed_at, lot_quantity, products(name)')
+        .select('id, order_number, status, completed_at, lot_quantity, client_name, products(name)')
         .in('id', missingIds)
       completedWithTasks = (data || []).sort((a: any, b: any) =>
         new Date(b.completed_at || 0).getTime() - new Date(a.completed_at || 0).getTime()
@@ -451,6 +451,9 @@ export default function PlanDiarioPage() {
                       {order.products?.name}
                       {order.lot_quantity != null && <span className="text-slate-400"> ({order.lot_quantity})</span>}
                     </div>
+                    <div className="text-[10px] text-slate-400">
+                      {order.client_name === 'Troya' || !order.client_name ? 'Troya (stock propio)' : `Cliente: ${order.client_name}`}
+                    </div>
                   </td>
                   {dates.map((d) => {
                     const r = dayResult(order.id, d)
@@ -496,6 +499,9 @@ export default function PlanDiarioPage() {
                 <h3 className="font-semibold text-slate-800 text-lg">
                   #{orderDetailModal.order.order_number} — {orderDetailModal.order.products?.name}
                 </h3>
+                <p className="text-xs text-slate-400">
+                  {orderDetailModal.order.client_name === 'Troya' || !orderDetailModal.order.client_name ? 'Troya (stock propio)' : `Cliente: ${orderDetailModal.order.client_name}`}
+                </p>
                 <p className="text-sm text-slate-500">Estado al {shortDate(orderDetailModal.date)}</p>
               </div>
               <button onClick={() => setOrderDetailModal(null)} className="text-slate-400 hover:text-slate-600 text-lg leading-none">✕</button>

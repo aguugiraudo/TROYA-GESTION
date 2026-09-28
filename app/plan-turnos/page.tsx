@@ -26,6 +26,10 @@ function formatHoursMinutes(hoursDecimal: number) {
   return `${h}hs ${m}min`
 }
 
+function clienteLabel(clientName: string | null | undefined) {
+  return !clientName || clientName === 'Troya' ? 'Troya (stock propio)' : `Cliente: ${clientName}`
+}
+
 function isLaserSectorName(name: string) {
   const n = name.toLowerCase()
   return n.includes('láser') || n.includes('laser')
@@ -94,7 +98,7 @@ export default function PlanTurnosPage() {
     const { data: sectorsData } = await supabase.from('sectors').select('*').order('sequence_no')
     setSectors(sectorsData || [])
     const { data: ordersData } = await supabase
-      .from('orders').select('id, order_number, product_id, lot_quantity, products(name)').in('status', ['pending', 'in_progress'])
+      .from('orders').select('id, order_number, product_id, lot_quantity, client_name, products(name)').in('status', ['pending', 'in_progress'])
     setOrders(ordersData || [])
 
     const orderIds = (ordersData || []).map((o: any) => o.id)
@@ -107,7 +111,7 @@ export default function PlanTurnosPage() {
   async function fetchTasksAndAvailability() {
     const { data: taskData } = await supabase
       .from('operator_daily_tasks')
-      .select('*, operators(full_name), orders(order_number, products(name)), sectors(name), components(name), laser_nidos(numero, standard_time_minutes, carga_descarga_minutes, laser_espesores(espesor_mm, material))')
+      .select('*, operators(full_name), orders(order_number, client_name, products(name)), sectors(name), components(name), laser_nidos(numero, standard_time_minutes, carga_descarga_minutes, laser_espesores(espesor_mm, material))')
       .eq('plan_date', planDate)
       .order('created_at')
     setTasks(taskData || [])
@@ -703,7 +707,7 @@ export default function PlanTurnosPage() {
               <option value={FIVE_S_VALUE}>🧹 5S (mejora continua, sin OP)</option>
               {ordersForSector.length > 0 && (
                 <optgroup label="Órdenes pendientes">
-                  {ordersForSector.map((o) => <option key={o.id} value={o.id}>#{o.order_number} — {o.products?.name}</option>)}
+                  {ordersForSector.map((o) => <option key={o.id} value={o.id}>#{o.order_number} — {o.products?.name} — {clienteLabel(o.client_name)}</option>)}
                 </optgroup>
               )}
             </select>
@@ -862,6 +866,7 @@ export default function PlanTurnosPage() {
                             <td className="py-2 leading-tight">
                               <div className="text-xs text-slate-400">#{t.orders?.order_number}</div>
                               <div className="text-slate-700">{t.orders?.products?.name}</div>
+                              <div className="text-[10px] text-slate-400">{clienteLabel(t.orders?.client_name)}</div>
                               {nidoLabel(t) && (
                                 <div className="text-[10px] text-emerald-700 bg-emerald-50 rounded px-1.5 py-0.5 inline-block mt-0.5">{nidoLabel(t)}</div>
                               )}
@@ -1019,6 +1024,7 @@ export default function PlanTurnosPage() {
                               <p className="text-sm font-medium text-slate-700 break-words">
                                 #{t.orders?.order_number} — {t.orders?.products?.name}
                               </p>
+                              <p className="text-[10px] text-slate-400">{clienteLabel(t.orders?.client_name)}</p>
                               {nidoLabel(t) && (
                                 <div className="text-[10px] text-emerald-700 bg-emerald-50 rounded px-1.5 py-0.5 inline-block mt-1">{nidoLabel(t)}</div>
                               )}

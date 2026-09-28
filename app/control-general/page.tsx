@@ -206,7 +206,10 @@ export default function ControlGeneralPage() {
                 return (
                 <tr key={order.id} className="border-t border-slate-100 hover:bg-slate-50/60">
                   <td className="p-3 font-medium text-slate-700">#{order.order_number}</td>
-                  <td className="p-3 text-slate-700">{order.products?.name}</td>
+                  <td className="p-3 text-slate-700">
+                    <div>{order.products?.name}</div>
+                    <div className="text-xs text-slate-400">{order.client_name === 'Troya' || !order.client_name ? 'Troya (stock propio)' : `Cliente: ${order.client_name}`}</div>
+                  </td>
                   <td className="p-3 text-center text-slate-600">{order.lot_quantity}</td>
                   {sectors.map((sector) => {
                     const rows = rowsFor(order.id, sector.id)
