@@ -29,6 +29,7 @@ export default function InsumosPage() {
   const canEdit = role === 'perfil_1' || role === 'perfil_2'
 
   const [tab, setTab] = useState<Tab>('stock')
+  const [showAyuda, setShowAyuda] = useState(false)
 
   const [categorias, setCategorias] = useState<any[]>([])
   const [items, setItems] = useState<any[]>([])
@@ -361,6 +362,56 @@ export default function InsumosPage() {
       <p className="text-xs text-slate-400 mb-5">
         Para arrancar: creá el ítem en "Stock" y después cargá su primer movimiento en "Ingresos" — ese primer ingreso es el que arranca el stock, no hace falta cargarlo aparte.
       </p>
+
+      <div className="bg-blue-50 border border-blue-200 rounded-xl shadow-sm mb-6 overflow-hidden">
+        <button onClick={() => setShowAyuda(!showAyuda)} className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold text-blue-800">
+          <span>📋 ¿Cómo usar este módulo?</span>
+          <span className={`text-xs transition-transform ${showAyuda ? 'rotate-180' : ''}`}>▾</span>
+        </button>
+        {showAyuda && (
+          <div className="px-5 pb-5 pt-1 space-y-5 text-sm text-slate-700">
+            <div>
+              <p className="font-semibold text-slate-800 mb-2">Uso diario — Ingresos y Egresos</p>
+              <ol className="space-y-2">
+                {[
+                  'Cada vez que llegue una compra (guantes, discos, electrodos, lo que sea), entrá a Ingresos, buscá el ítem, cargá la cantidad y guardá.',
+                  'Cada vez que alguien retire algo del pañol, entrá a Egresos, elegí el ítem, quién lo retira y la cantidad. El operario es obligatorio — no se puede guardar un egreso sin decir quién se lo llevó.',
+                ].map((texto, i) => (
+                  <li key={i} className="flex gap-3">
+                    <span className="shrink-0 w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center">{i + 1}</span>
+                    <span className="pt-0.5">{texto}</span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+
+            <div>
+              <p className="font-semibold text-slate-800 mb-2">Fin de mes — Conteo físico</p>
+              <ol className="space-y-2">
+                {[
+                  'El último día del mes, entrá a la pestaña Inventario.',
+                  'Contá a mano lo que hay realmente en el pañol de cada ítem, y escribilo en la columna "Contado" de cada fila.',
+                  'Apretá "Guardar todos los conteos" — el sistema corrige el stock solo, no hace falta calcular nada.',
+                  'Apretá "⬇ Descargar resumen de compra" — baja un Excel con SOLO los ítems que quedaron por debajo del mínimo (código, artículo, mínimo, actual, cuánto pedir). Si todo está bien, avisa que no hace falta pedir nada.',
+                  'Mandale ese Excel a Agustín por WhatsApp o mail.',
+                ].map((texto, i) => (
+                  <li key={i} className="flex gap-3">
+                    <span className="shrink-0 w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center">{i + 1}</span>
+                    <span className="pt-0.5">{texto}</span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+
+            <div>
+              <p className="font-semibold text-slate-800 mb-2">De paso, para entender qué se está gastando</p>
+              <p className="pl-9 text-slate-600">
+                En la pestaña <strong>Consumo</strong> podés ver, por ítem, cuánto se usó en el mes, cada cuántos días se retira, y quién lo hizo — sirve para ajustar el stock mínimo de cada cosa según cómo se usa de verdad, no a ojo.
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
 
       {!canEdit && (
         <div className="mb-4 bg-amber-50 border border-amber-200 text-amber-700 text-xs rounded-md px-3 py-2">

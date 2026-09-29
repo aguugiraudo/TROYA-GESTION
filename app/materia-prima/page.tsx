@@ -34,6 +34,7 @@ export default function MateriaPrimaPage() {
   const canEdit = role === 'perfil_1' || role === 'perfil_2'
 
   const [tab, setTab] = useState<Tab>('stock')
+  const [showAyuda, setShowAyuda] = useState(false)
 
   const [products, setProducts] = useState<any[]>([])
   const [materiales, setMateriales] = useState<any[]>([])
@@ -429,6 +430,43 @@ export default function MateriaPrimaPage() {
     <main className="p-6 max-w-5xl mx-auto">
       <h1 className="text-2xl font-semibold text-slate-800 mb-1">Materia Prima</h1>
       <p className="text-sm text-slate-500 mb-6">Composición por producto, y calculadora de necesidad para compras.</p>
+
+      <div className="bg-blue-50 border border-blue-200 rounded-xl shadow-sm mb-6 overflow-hidden">
+        <button onClick={() => setShowAyuda(!showAyuda)} className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold text-blue-800">
+          <span>📋 ¿Cómo usar este módulo?</span>
+          <span className={`text-xs transition-transform ${showAyuda ? 'rotate-180' : ''}`}>▾</span>
+        </button>
+        {showAyuda && (
+          <div className="px-5 pb-5 pt-1 space-y-5 text-sm text-slate-700">
+            <div>
+              <p className="font-semibold text-slate-800 mb-2">Antes que nada</p>
+              <p className="pl-9 text-slate-600">
+                Cada material tiene una <strong>Ubicación</strong> (dónde está guardado físicamente: Chapas, Pañol, Bulonería, Estantería Mecanizado) — eso ya está cargado, no hace falta tocarlo salvo que cambie algo de lugar.
+              </p>
+            </div>
+
+            <div>
+              <p className="font-semibold text-slate-800 mb-2">Fin de mes — Conteo físico</p>
+              <ol className="space-y-2">
+                {[
+                  'Entrá a la pestaña Inventario.',
+                  'Filtrá por una ubicación a la vez (arriba, el desplegable) — así contás todo lo que está junto, sin ir de un lado a otro del depósito.',
+                  'Para cada material, contá las chapas/unidades reales y escribilas en "Contado" (en la misma unidad que ves en pantalla — si dice "u." son unidades enteras, no metros cuadrados).',
+                  'Apretá "Guardar todos los conteos" para esa ubicación.',
+                  'Repetí los pasos 2 a 4 con la siguiente ubicación, hasta terminar todas.',
+                  'Cuando ya contaste TODO, apretá "⬇ Exportar conteo a Excel" — no importa en qué ubicación haya quedado el filtro, siempre trae el conteo completo de todos los materiales.',
+                  'Mandale ese Excel a Agustín (es el que después va a Compras).',
+                ].map((texto, i) => (
+                  <li key={i} className="flex gap-3">
+                    <span className="shrink-0 w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center">{i + 1}</span>
+                    <span className="pt-0.5">{texto}</span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          </div>
+        )}
+      </div>
 
       {!canEdit && (
         <div className="mb-4 bg-amber-50 border border-amber-200 text-amber-700 text-xs rounded-md px-3 py-2">
