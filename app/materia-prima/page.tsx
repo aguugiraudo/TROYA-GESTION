@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { useAuth } from '../components/AuthGate'
+import * as XLSX from 'xlsx'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -305,16 +306,11 @@ export default function MateriaPrimaPage() {
       const diferencia = contado !== '' ? Math.round((Number(contado) - stockTeoricoPres) * 100) / 100 : ''
       return [m.codigo || '', m.nombre, m.ubicacion || '', m.proveedor_nombre || '', Math.round(stockTeoricoPres * 100) / 100, contado, diferencia]
     })
-    const csv = [header, ...rows]
-      .map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(';'))
-      .join('\r\n')
-    const blob = new Blob(['\uFEFFsep=;\r\n' + csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `inventario_materia_prima_${new Date().toISOString().split('T')[0]}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+    const ws = XLSX.utils.aoa_to_sheet([header, ...rows])
+    ws['!cols'] = [{ wch: 10 }, { wch: 40 }, { wch: 20 }, { wch: 25 }, { wch: 14 }, { wch: 12 }, { wch: 14 }]
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Inventario')
+    XLSX.writeFile(wb, `inventario_materia_prima_${new Date().toISOString().split('T')[0]}.xlsx`)
   }
 
   function exportStockToExcel() {
@@ -331,16 +327,11 @@ export default function MateriaPrimaPage() {
         bajo ? 'STOCK BAJO' : 'OK',
       ]
     })
-    const csv = [header, ...rows]
-      .map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(';'))
-      .join('\r\n')
-    const blob = new Blob(['\uFEFFsep=;\r\n' + csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `stock_materia_prima_${new Date().toISOString().split('T')[0]}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+    const ws = XLSX.utils.aoa_to_sheet([header, ...rows])
+    ws['!cols'] = [{ wch: 10 }, { wch: 40 }, { wch: 25 }, { wch: 12 }, { wch: 12 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 12 }]
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Stock')
+    XLSX.writeFile(wb, `stock_materia_prima_${new Date().toISOString().split('T')[0]}.xlsx`)
   }
 
   async function removeProductMaterial(id: string) {

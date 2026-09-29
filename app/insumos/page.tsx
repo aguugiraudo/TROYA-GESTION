@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { useAuth } from '../components/AuthGate'
+import * as XLSX from 'xlsx'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -316,6 +317,30 @@ export default function InsumosPage() {
     }
   }
 
+  // Resumen de compra: solo los ítems cuyo stock actual quedó por debajo del mínimo.
+  // Se descarga como .xlsx para que el encargado se lo mande a Agustín por mail o WhatsApp.
+  function descargarResumenCompra() {
+    const faltantes = items
+      .map((it) => ({ item: it, stock: stockByItem[it.id] || 0 }))
+      .filter(({ item, stock }) => stock < item.stock_minimo)
+
+    if (faltantes.length === 0) {
+      alert('No hay ningún ítem por debajo del stock mínimo — no hace falta pedir nada.')
+      return
+    }
+
+    const header = ['Código', 'Artículo', 'Stock mínimo', 'Stock actual', 'Cantidad a pedir']
+    const rows = faltantes.map(({ item, stock }) => [
+      item.codigo || '', item.nombre, item.stock_minimo, stock,
+      Math.ceil(item.stock_minimo - stock),
+    ])
+    const ws = XLSX.utils.aoa_to_sheet([header, ...rows])
+    ws['!cols'] = [{ wch: 10 }, { wch: 40 }, { wch: 14 }, { wch: 14 }, { wch: 16 }]
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Compra')
+    XLSX.writeFile(wb, `compra_insumos_${today()}.xlsx`)
+  }
+
   const itemsByCategoria: Record<string, any[]> = {}
   const sinCategoria: any[] = []
   items.forEach((it) => {
@@ -592,7 +617,10 @@ export default function InsumosPage() {
           ) : (
             <>
               {canEdit && (
-                <div className="flex justify-end mb-3">
+                <div className="flex justify-end gap-2 mb-3">
+                  <button onClick={descargarResumenCompra} className="text-xs border border-slate-300 text-slate-600 px-3 py-1.5 rounded-md hover:bg-slate-50">
+                    ⬇ Descargar resumen de compra
+                  </button>
                   <button onClick={saveAllInventoryAdjustments} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md hover:bg-emerald-700">
                     Guardar todos los conteos
                   </button>
