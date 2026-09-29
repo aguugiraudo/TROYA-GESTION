@@ -16,7 +16,12 @@ function shortDate(iso: string) {
   return iso.split('-').reverse().join('/')
 }
 
-type Tab = 'stock' | 'ingresos' | 'egresos' | 'inventario'
+function currentMonthValue() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+type Tab = 'stock' | 'ingresos' | 'egresos' | 'inventario' | 'consumo'
 
 export default function InsumosPage() {
   const { role } = useAuth()
@@ -62,6 +67,27 @@ export default function InsumosPage() {
   // --- Inventario ---
   const [invCounts, setInvCounts] = useState<Record<string, string>>({})
   const [invSavedDiffs, setInvSavedDiffs] = useState<Record<string, number>>({})
+
+  // --- Consumo ---
+  const [consumoMonth, setConsumoMonth] = useState(currentMonthValue())
+  const [consumoEgresos, setConsumoEgresos] = useState<any[]>([])
+  const [consumoSortBy, setConsumoSortBy] = useState<'nombre' | 'cantidad'>('cantidad')
+  const [editingStockMinimoConsumo, setEditingStockMinimoConsumo] = useState<string | null>(null)
+
+  async function fetchConsumo() {
+    const [y, m] = consumoMonth.split('-').map(Number)
+    const monthStart = `${consumoMonth}-01`
+    const monthEnd = new Date(y, m, 1).toISOString().split('T')[0]
+    const { data } = await supabase
+      .from('insumo_movimientos')
+      .select('*, insumos(nombre, unidad_medida), operators(full_name)')
+      .eq('tipo', 'egreso')
+      .gte('fecha', monthStart).lt('fecha', monthEnd)
+      .order('fecha', { ascending: false })
+    setConsumoEgresos(data || [])
+  }
+
+  useEffect(() => { fetchConsumo() }, [consumoMonth])
 
   // --- Historial por ítem (modal) ---
   const [historyItem, setHistoryItem] = useState<any | null>(null)
@@ -324,6 +350,7 @@ export default function InsumosPage() {
           ['ingresos', 'Ingresos'],
           ['egresos', 'Egresos'],
           ['inventario', 'Inventario'],
+          ['consumo', 'Consumo'],
         ] as [Tab, string][]).map(([key, label]) => (
           <button
             key={key}
@@ -624,6 +651,110 @@ export default function InsumosPage() {
               </div>
             </>
           )}
+        </>
+      )}
+
+      {/* ===================== PESTAÑA CONSUMO ===================== */}
+      {tab === 'consumo' && (
+        <>
+          <p className="text-xs text-slate-400 mb-4">
+            Cuánto se retiró de cada ítem en el mes, quién y cuándo — para ajustar el stock mínimo según el ritmo de uso real, no a ojo.
+          </p>
+
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+            <div className="flex items-center gap-3">
+              <label className="text-sm font-medium text-slate-700">Mes</label>
+              <input type="month" value={consumoMonth} onChange={(e) => setConsumoMonth(e.target.value)}
+                className="border border-slate-300 rounded-md px-2 py-1.5 text-sm" />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-400">Ordenar por</span>
+              <button onClick={() => setConsumoSortBy('cantidad')}
+                className={`text-xs px-3 py-1.5 rounded-md font-medium ${consumoSortBy === 'cantidad' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
+                Mayor consumo
+              </button>
+              <button onClick={() => setConsumoSortBy('nombre')}
+                className={`text-xs px-3 py-1.5 rounded-md font-medium ${consumoSortBy === 'nombre' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
+                A-Z
+              </button>
+            </div>
+          </div>
+
+          {(() => {
+            const porItem: Record<string, { item: any; cantidad: number; egresos: any[] }> = {}
+            consumoEgresos.forEach((e: any) => {
+              if (!porItem[e.insumo_id]) {
+                const item = items.find((it) => it.id === e.insumo_id)
+                if (!item) return
+                porItem[e.insumo_id] = { item, cantidad: 0, egresos: [] }
+              }
+              porItem[e.insumo_id].cantidad += Number(e.cantidad)
+              porItem[e.insumo_id].egresos.push(e)
+            })
+            const lista = Object.values(porItem).sort((a, b) =>
+              consumoSortBy === 'cantidad' ? b.cantidad - a.cantidad : a.item.nombre.localeCompare(b.item.nombre)
+            )
+
+            if (lista.length === 0) return <p className="text-slate-400 text-sm">No hubo egresos este mes.</p>
+
+            return (
+              <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm bg-white">
+                <table className="w-full text-sm border-collapse">
+                  <thead>
+                    <tr className="bg-slate-900 text-white text-left">
+                      <th className="p-3 font-medium">Ítem</th>
+                      <th className="p-3 font-medium text-center">Consumido este mes</th>
+                      <th className="p-3 font-medium text-center">Retiros</th>
+                      <th className="p-3 font-medium text-center">Frecuencia</th>
+                      <th className="p-3 font-medium text-center">Stock mínimo</th>
+                      <th className="p-3 font-medium"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lista.map(({ item, cantidad, egresos }) => {
+                      const fechasOrdenadas = [...egresos].map((e) => e.fecha).sort()
+                      let frecuenciaTexto = '—'
+                      if (fechasOrdenadas.length >= 2) {
+                        const primera = new Date(fechasOrdenadas[0]).getTime()
+                        const ultima = new Date(fechasOrdenadas[fechasOrdenadas.length - 1]).getTime()
+                        const diasTotales = (ultima - primera) / (1000 * 60 * 60 * 24)
+                        const promedioDias = diasTotales / (fechasOrdenadas.length - 1)
+                        frecuenciaTexto = promedioDias < 1 ? 'varias veces por día' : `cada ${Math.round(promedioDias * 10) / 10} días`
+                      }
+                      return (
+                        <tr key={item.id} className="border-t border-slate-100">
+                          <td className="p-3 text-slate-700 font-medium">
+                            <button onClick={() => openItemHistory(item)} className="hover:text-blue-700 hover:underline decoration-dotted text-left">
+                              {item.nombre}
+                            </button>
+                          </td>
+                          <td className="p-3 text-center text-slate-700 font-semibold">{cantidad} {item.unidad_medida}</td>
+                          <td className="p-3 text-center text-slate-500">{egresos.length}</td>
+                          <td className="p-3 text-center text-slate-500">{frecuenciaTexto}</td>
+                          <td className="p-3 text-center">
+                            {canEdit && editingStockMinimoConsumo === item.id ? (
+                              <input type="number" autoFocus defaultValue={item.stock_minimo}
+                                onBlur={(e) => { saveItemStockMinimo(item.id, e.target.value); setEditingStockMinimoConsumo(null) }}
+                                onKeyDown={(ev) => { if (ev.key === 'Enter') ev.currentTarget.blur() }}
+                                className="w-20 text-center rounded-md border border-blue-300 py-1" />
+                            ) : (
+                              <button onClick={() => canEdit && setEditingStockMinimoConsumo(item.id)} disabled={!canEdit}
+                                className={canEdit ? 'hover:underline decoration-dotted' : ''}>
+                                {item.stock_minimo} {item.unidad_medida}
+                              </button>
+                            )}
+                          </td>
+                          <td className="p-3 text-right">
+                            <button onClick={() => openItemHistory(item)} className="text-xs text-blue-600 hover:underline">Ver trazabilidad</button>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )
+          })()}
         </>
       )}
 

@@ -306,9 +306,9 @@ export default function MateriaPrimaPage() {
       return [m.codigo || '', m.nombre, m.ubicacion || '', m.proveedor_nombre || '', Math.round(stockTeoricoPres * 100) / 100, contado, diferencia]
     })
     const csv = [header, ...rows]
-      .map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
-      .join('\n')
-    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })
+      .map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(';'))
+      .join('\r\n')
+    const blob = new Blob(['\uFEFFsep=;\r\n' + csv], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -332,9 +332,9 @@ export default function MateriaPrimaPage() {
       ]
     })
     const csv = [header, ...rows]
-      .map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
-      .join('\n')
-    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })
+      .map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(';'))
+      .join('\r\n')
+    const blob = new Blob(['\uFEFFsep=;\r\n' + csv], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
