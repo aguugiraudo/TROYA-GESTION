@@ -283,6 +283,11 @@ export default function MateriaPrimaPage() {
         notes: `Inventario físico: contado ${contadoInput} u. (${Math.round(contadoBase * 100) / 100} ${m.unidad_medida}), teórico ${Math.round((stockTeorico / (pres > 1 ? pres : 1)) * 100) / 100} u.`,
       })
     }
+    // Guardamos SIEMPRE la fecha y cantidad del conteo (aunque diera igual al teórico), para que el
+    // Excel de Inventario refleje el último conteo real, no el stock teórico del momento de exportar
+    await supabase.from('materiales').update({
+      ultimo_conteo_fecha: today(), ultimo_conteo_cantidad: parseFloat(contadoInput),
+    }).eq('id', m.id)
     setInvSavedDiffs((prev) => ({ ...prev, [m.id]: diferencia }))
     fetchAll()
   }
@@ -296,18 +301,17 @@ export default function MateriaPrimaPage() {
     }
   }
 
+  // Exporta el ÚLTIMO CONTEO FÍSICO guardado de cada material (no el teórico), sin importar el filtro
+  // de ubicación que tengas puesto en pantalla — siempre trae TODOS los materiales.
   function exportInventarioToExcel() {
-    const header = ['C\u00F3digo', 'Material', 'Ubicaci\u00F3n', 'Proveedor', 'Stock te\u00F3rico (u.)', 'Contado (u.)', 'Diferencia (u.)']
-    const rows = materialesFiltradosInventario.map((m) => {
-      const pres = Number(m.presentacion || 1)
-      const stockTeorico = stockByMaterial[m.id] || 0
-      const stockTeoricoPres = pres > 1 ? stockTeorico / pres : stockTeorico
-      const contado = invCounts[m.id] !== undefined && invCounts[m.id] !== '' ? parseFloat(invCounts[m.id]) : ''
-      const diferencia = contado !== '' ? Math.round((Number(contado) - stockTeoricoPres) * 100) / 100 : ''
-      return [m.codigo || '', m.nombre, m.ubicacion || '', m.proveedor_nombre || '', Math.round(stockTeoricoPres * 100) / 100, contado, diferencia]
-    })
+    const header = ['C\u00F3digo', 'Material', 'Ubicaci\u00F3n', 'Proveedor', '\u00DAltimo conteo (fecha)', 'Cantidad contada (u.)']
+    const rows = materiales.map((m) => [
+      m.codigo || '', m.nombre, m.ubicacion || '', m.proveedor_nombre || '',
+      m.ultimo_conteo_fecha ? m.ultimo_conteo_fecha.split('-').reverse().join('/') : 'Sin contar todav\u00EDa',
+      m.ultimo_conteo_cantidad != null ? m.ultimo_conteo_cantidad : '',
+    ])
     const ws = XLSX.utils.aoa_to_sheet([header, ...rows])
-    ws['!cols'] = [{ wch: 10 }, { wch: 40 }, { wch: 20 }, { wch: 25 }, { wch: 14 }, { wch: 12 }, { wch: 14 }]
+    ws['!cols'] = [{ wch: 10 }, { wch: 40 }, { wch: 20 }, { wch: 25 }, { wch: 16 }, { wch: 16 }]
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'Inventario')
     XLSX.writeFile(wb, `inventario_materia_prima_${new Date().toISOString().split('T')[0]}.xlsx`)
@@ -453,11 +457,6 @@ export default function MateriaPrimaPage() {
           <div className="flex items-center justify-between mb-3">
             <h2 className="font-semibold text-slate-700">Materiales</h2>
             <div className="flex items-center gap-2">
-              {materiales.length > 0 && (
-                <button onClick={exportStockToExcel} className="text-xs border border-slate-300 text-slate-600 px-3 py-1.5 rounded-md hover:bg-slate-50">
-                  ⬇ Exportar a Excel
-                </button>
-              )}
               {canEdit && (
                 <button onClick={() => setShowNewMaterial(true)} className="text-xs bg-slate-700 text-white px-3 py-1.5 rounded-md hover:bg-slate-800">
                   + Nuevo material
@@ -760,8 +759,8 @@ export default function MateriaPrimaPage() {
               <option value="__sin__">(Sin ubicación asignada)</option>
             </select>
             <div className="flex items-center gap-2">
-              <button onClick={exportInventarioToExcel} className="text-xs border border-slate-300 text-slate-600 px-3 py-1.5 rounded-md hover:bg-slate-50">
-                ⬇ Exportar a Excel
+              <button onClick={exportInventarioToExcel} className="text-xs border border-slate-300 text-slate-600 px-3 py-1.5 rounded-md hover:bg-slate-50" title="Exporta el último conteo guardado de TODOS los materiales, sin importar el filtro de arriba">
+                ⬇ Exportar conteo a Excel
               </button>
               {canEdit && (
                 <button onClick={saveAllInventoryAdjustments} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md hover:bg-emerald-700">
