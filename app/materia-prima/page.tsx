@@ -11,6 +11,10 @@ const supabase = createClient(
 
 type Tab = 'stock' | 'inventario' | 'calculadora' | 'composicion'
 
+function today() {
+  return new Date().toISOString().split('T')[0]
+}
+
 function formatStock(baseQty: number, material: any) {
   const pres = Number(material.presentacion || 1)
   if (pres > 1) {
