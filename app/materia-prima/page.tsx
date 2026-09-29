@@ -95,7 +95,7 @@ export default function MateriaPrimaPage() {
     setMateriales(matData || [])
     const { data: sectorsData } = await supabase.from('sectors').select('*').order('sequence_no')
     setSectors(sectorsData || [])
-    const { data: pmData } = await supabase.from('producto_materiales').select('*, materiales(nombre, unidad_medida, codigo, proveedor_nombre, presentacion), sectors(name)')
+    const { data: pmData } = await supabase.from('producto_materiales').select('*, materiales(nombre, unidad_medida, codigo, proveedor_nombre, presentacion, ultimo_conteo_fecha, ultimo_conteo_cantidad), sectors(name)')
     setAllProductMaterials(pmData || [])
 
     const { data: stockData } = await supabase.from('material_stock').select('*')
@@ -379,7 +379,7 @@ export default function MateriaPrimaPage() {
   }
 
   // Total de materiales necesarios según las cantidades cargadas
-  const materialTotals: Record<string, { nombre: string; codigo: string; proveedor: string; unidad: string; presentacion: number; total: number }> = {}
+  const materialTotals: Record<string, { nombre: string; codigo: string; proveedor: string; unidad: string; presentacion: number; total: number; ultimoConteoFecha: string | null; ultimoConteoCantidad: number | null }> = {}
   calcRows.forEach((row) => {
     const qty = parseFloat(row.qty || '0')
     if (!qty) return
@@ -394,6 +394,8 @@ export default function MateriaPrimaPage() {
           unidad: pm.materiales?.unidad_medida || 'u.',
           presentacion: Number(pm.materiales?.presentacion || 1),
           total: 0,
+          ultimoConteoFecha: pm.materiales?.ultimo_conteo_fecha || null,
+          ultimoConteoCantidad: pm.materiales?.ultimo_conteo_cantidad != null ? Number(pm.materiales.ultimo_conteo_cantidad) : null,
         }
       }
       materialTotals[key].total += qty * pm.cantidad_por_unidad
@@ -416,6 +418,17 @@ export default function MateriaPrimaPage() {
   }
 
   const materialTotalsSorted = sortMaterials(materialTotalsList)
+
+  // A comprar = lo que necesito, en unidades de presentación (chapas), menos lo que el último conteo
+  // físico dice que ya tenés. Si nunca se contó ese material, no restamos nada (necesario completo)
+  // y lo marcamos aparte para que sepas que ese número todavía no está confirmado.
+  function aComprarInfo(m: typeof materialTotalsList[number]) {
+    if (m.presentacion <= 1) return { aComprar: null, sinContar: m.ultimoConteoFecha == null }
+    const necesarioEnPresentacion = m.total / m.presentacion
+    const disponible = m.ultimoConteoCantidad ?? 0
+    const aComprar = Math.max(0, Math.ceil(necesarioEnPresentacion - disponible))
+    return { aComprar, sinContar: m.ultimoConteoFecha == null }
+  }
 
   const materialsByProveedor: Record<string, typeof materialTotalsList> = {}
   materialTotalsList.forEach((m) => {
@@ -980,20 +993,35 @@ export default function MateriaPrimaPage() {
                         <th className="p-3 font-medium">Código</th>
                         <th className="p-3 font-medium">Material</th>
                         <th className="p-3 font-medium text-right">Necesario</th>
+                        <th className="p-3 font-medium text-right">Último conteo</th>
                         <th className="p-3 font-medium text-right">A comprar</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {sortMaterials(materialsByProveedor[prov]).map((m) => (
-                        <tr key={m.nombre + m.codigo} className="border-t border-slate-100">
-                          <td className="p-3 text-slate-400 text-xs">{m.codigo || '—'}</td>
-                          <td className="p-3 text-slate-700 font-medium">{m.nombre}</td>
-                          <td className="p-3 text-right text-slate-500">{Math.round(m.total * 100) / 100} {m.unidad}</td>
-                          <td className="p-3 text-right text-slate-700 font-semibold">
-                            {m.presentacion > 1 ? `${Math.ceil(m.total / m.presentacion)} u.` : '—'}
-                          </td>
-                        </tr>
-                      ))}
+                      {sortMaterials(materialsByProveedor[prov]).map((m) => {
+                        const { aComprar, sinContar } = aComprarInfo(m)
+                        return (
+                          <tr key={m.nombre + m.codigo} className="border-t border-slate-100">
+                            <td className="p-3 text-slate-400 text-xs">{m.codigo || '—'}</td>
+                            <td className="p-3 text-slate-700 font-medium">{m.nombre}</td>
+                            <td className="p-3 text-right text-slate-500">{Math.round(m.total * 100) / 100} {m.unidad}</td>
+                            <td className="p-3 text-right text-xs">
+                              {m.ultimoConteoCantidad != null ? (
+                                <span className="text-slate-500">{m.ultimoConteoCantidad} u. <span className="text-slate-400">({m.ultimoConteoFecha?.split('-').reverse().join('/')})</span></span>
+                              ) : (
+                                <span className="text-amber-600">sin contar</span>
+                              )}
+                            </td>
+                            <td className="p-3 text-right font-semibold">
+                              {aComprar != null ? (
+                                <span className={sinContar ? 'text-amber-600' : 'text-slate-700'}>
+                                  {aComprar} u.{sinContar && ' ⚠'}
+                                </span>
+                              ) : '—'}
+                            </td>
+                          </tr>
+                        )
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -1008,21 +1036,36 @@ export default function MateriaPrimaPage() {
                     <th className="p-3 font-medium">Material</th>
                     <th className="p-3 font-medium">Proveedor</th>
                     <th className="p-3 font-medium text-right">Necesario</th>
+                    <th className="p-3 font-medium text-right">Último conteo</th>
                     <th className="p-3 font-medium text-right">A comprar</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {materialTotalsSorted.map((m) => (
-                    <tr key={m.nombre + m.codigo} className="border-t border-slate-100">
-                      <td className="p-3 text-slate-400 text-xs">{m.codigo || '—'}</td>
-                      <td className="p-3 text-slate-700 font-medium">{m.nombre}</td>
-                      <td className="p-3 text-slate-500 text-xs">{m.proveedor}</td>
-                      <td className="p-3 text-right text-slate-500">{Math.round(m.total * 100) / 100} {m.unidad}</td>
-                      <td className="p-3 text-right text-slate-700 font-semibold">
-                        {m.presentacion > 1 ? `${Math.ceil(m.total / m.presentacion)} u.` : '—'}
-                      </td>
-                    </tr>
-                  ))}
+                  {materialTotalsSorted.map((m) => {
+                    const { aComprar, sinContar } = aComprarInfo(m)
+                    return (
+                      <tr key={m.nombre + m.codigo} className="border-t border-slate-100">
+                        <td className="p-3 text-slate-400 text-xs">{m.codigo || '—'}</td>
+                        <td className="p-3 text-slate-700 font-medium">{m.nombre}</td>
+                        <td className="p-3 text-slate-500 text-xs">{m.proveedor}</td>
+                        <td className="p-3 text-right text-slate-500">{Math.round(m.total * 100) / 100} {m.unidad}</td>
+                        <td className="p-3 text-right text-xs">
+                          {m.ultimoConteoCantidad != null ? (
+                            <span className="text-slate-500">{m.ultimoConteoCantidad} u. <span className="text-slate-400">({m.ultimoConteoFecha?.split('-').reverse().join('/')})</span></span>
+                          ) : (
+                            <span className="text-amber-600">sin contar</span>
+                          )}
+                        </td>
+                        <td className="p-3 text-right font-semibold">
+                          {aComprar != null ? (
+                            <span className={sinContar ? 'text-amber-600' : 'text-slate-700'}>
+                              {aComprar} u.{sinContar && ' ⚠'}
+                            </span>
+                          ) : '—'}
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
