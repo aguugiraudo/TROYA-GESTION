@@ -297,7 +297,7 @@ export default function MateriaPrimaPage() {
   }
 
   function exportInventarioToExcel() {
-    const header = ['Código', 'Material', 'Ubicación', 'Proveedor', 'Stock teórico (u.)', 'Contado (u.)', 'Diferencia (u.)']
+    const header = ['C\u00F3digo', 'Material', 'Ubicaci\u00F3n', 'Proveedor', 'Stock te\u00F3rico (u.)', 'Contado (u.)', 'Diferencia (u.)']
     const rows = materialesFiltradosInventario.map((m) => {
       const pres = Number(m.presentacion || 1)
       const stockTeorico = stockByMaterial[m.id] || 0
@@ -314,7 +314,7 @@ export default function MateriaPrimaPage() {
   }
 
   function exportStockToExcel() {
-    const header = ['Código', 'Material', 'Proveedor', 'Unidad base', 'Presentación', 'Stock actual (u. presentación)', 'Stock actual (unidad base)', 'Stock mínimo (u. presentación)', 'Estado']
+    const header = ['C\u00F3digo', 'Material', 'Proveedor', 'Unidad base', 'Presentaci\u00F3n', 'Stock actual (u. presentaci\u00F3n)', 'Stock actual (unidad base)', 'Stock m\u00EDnimo (u. presentaci\u00F3n)', 'Estado']
     const rows = materiales.map((m) => {
       const stock = stockByMaterial[m.id] || 0
       const pres = Number(m.presentacion || 1)

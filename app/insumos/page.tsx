@@ -329,7 +329,7 @@ export default function InsumosPage() {
       return
     }
 
-    const header = ['Código', 'Artículo', 'Stock mínimo', 'Stock actual', 'Cantidad a pedir']
+    const header = ['C\u00F3digo', 'Art\u00EDculo', 'Stock m\u00EDnimo', 'Stock actual', 'Cantidad a pedir']
     const rows = faltantes.map(({ item, stock }) => [
       item.codigo || '', item.nombre, item.stock_minimo, stock,
       Math.ceil(item.stock_minimo - stock),
