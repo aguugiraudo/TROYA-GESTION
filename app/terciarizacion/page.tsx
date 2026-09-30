@@ -119,6 +119,7 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
   const [nvpValor, setNvpValor] = useState('')
 
   const [externaTotal, setExternaTotal] = useState(0)
+  const [externaPagado, setExternaPagado] = useState(0)
 
   async function fetchAll() {
     setLoading(true)
@@ -153,11 +154,12 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
     setRegistrosProduccion(regProdData || [])
 
     if (externaResumen) {
-      const { data: tercData } = await supabase.from('tercerizaciones').select('cantidad_enviada, precio_unitario, fecha_envio')
-      const totalExt = (tercData || [])
-        .filter((t: any) => t.fecha_envio >= monthStart && t.fecha_envio < monthEnd)
-        .reduce((s: number, t: any) => s + Number(t.cantidad_enviada) * Number(t.precio_unitario || 0), 0)
+      const { data: tercData } = await supabase.from('tercerizaciones').select('cantidad_enviada, precio_unitario, fecha_envio, pagado')
+      const delMes = (tercData || []).filter((t: any) => t.fecha_envio >= monthStart && t.fecha_envio < monthEnd)
+      const totalExt = delMes.reduce((s: number, t: any) => s + Number(t.cantidad_enviada) * Number(t.precio_unitario || 0), 0)
+      const pagadoExt = delMes.filter((t: any) => t.pagado).reduce((s: number, t: any) => s + Number(t.cantidad_enviada) * Number(t.precio_unitario || 0), 0)
       setExternaTotal(totalExt)
+      setExternaPagado(pagadoExt)
     }
 
     setLoading(false)
@@ -410,6 +412,9 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
   const totalPagadoManoDeObra = Object.values(totalGeneralPorTercero).reduce((s, v) => s + v.pagado, 0)
   const totalPendienteManoDeObra = totalManoDeObra - totalPagadoManoDeObra
   const totalTerciarizacion = totalManoDeObra + (externaResumen ? externaTotal : 0)
+  const totalPagadoGeneral = totalPagadoManoDeObra + (externaResumen ? externaPagado : 0)
+  const totalPendienteGeneral = totalTerciarizacion - totalPagadoGeneral
+  const externaPendiente = externaTotal - externaPagado
 
   if (loading) return <p className="text-slate-500">Cargando...</p>
 
@@ -538,17 +543,23 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
             </div>
           </div>
 
-          {/* Control de pagos — solo mano de obra, que es lo que se marca Pagado/Pendiente */}
+          {/* Control de pagos — combina mano de obra + tercerización externa */}
           <div className="grid grid-cols-2 gap-4">
             <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4">
-              <p className="text-xs text-slate-400 mb-1">Pagado (mano de obra)</p>
-              <p className="text-xl font-semibold text-slate-700">${totalPagadoManoDeObra.toLocaleString('es-AR')}</p>
+              <p className="text-xs text-slate-400 mb-1">Pagado</p>
+              <p className="text-xl font-semibold text-slate-700">${totalPagadoGeneral.toLocaleString('es-AR')}</p>
+              {externaResumen && (
+                <p className="text-[11px] text-slate-400 mt-1">Mano de obra: ${totalPagadoManoDeObra.toLocaleString('es-AR')} · Externa: ${externaPagado.toLocaleString('es-AR')}</p>
+              )}
             </div>
             <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4">
               <p className="text-xs text-slate-400 mb-1">Pendiente de pago</p>
-              <p className={`text-xl font-semibold ${totalPendienteManoDeObra > 0 ? 'text-amber-600' : 'text-slate-700'}`}>
-                ${totalPendienteManoDeObra.toLocaleString('es-AR')}
+              <p className={`text-xl font-semibold ${totalPendienteGeneral > 0 ? 'text-amber-600' : 'text-slate-700'}`}>
+                ${totalPendienteGeneral.toLocaleString('es-AR')}
               </p>
+              {externaResumen && (
+                <p className="text-[11px] text-slate-400 mt-1">Mano de obra: ${totalPendienteManoDeObra.toLocaleString('es-AR')} · Externa: ${externaPendiente.toLocaleString('es-AR')}</p>
+              )}
             </div>
           </div>
 
@@ -1126,6 +1137,11 @@ function Externa({ canEdit }: { canEdit: boolean }) {
     fetchAll()
   }
 
+  async function togglePagadoTercerizacion(t: any) {
+    await supabase.from('tercerizaciones').update({ pagado: !t.pagado }).eq('id', t.id)
+    fetchAll()
+  }
+
   const afuera = tercerizaciones.filter((t) => (Number(t.cantidad_enviada) - recibidoAcumulado(t.id)) > 0)
   const totalAfueraValor = afuera.reduce((s, t) => s + (Number(t.cantidad_enviada) - recibidoAcumulado(t.id)) * Number(t.precio_unitario || 0), 0)
 
@@ -1173,6 +1189,7 @@ function Externa({ canEdit }: { canEdit: boolean }) {
                     <th className="p-3 font-medium text-center">Enviado</th>
                     <th className="p-3 font-medium text-center">Recibido</th>
                     <th className="p-3 font-medium text-center">Pendiente</th>
+                    <th className="p-3 font-medium text-center">Pagado</th>
                     <th className="p-3 font-medium"></th>
                   </tr>
                 </thead>
@@ -1191,6 +1208,10 @@ function Externa({ canEdit }: { canEdit: boolean }) {
                         <td className="p-3 text-center text-slate-500">{t.cantidad_enviada}</td>
                         <td className="p-3 text-center text-slate-500">{recibido || '—'}</td>
                         <td className="p-3 text-center text-amber-600 font-semibold">{pendiente}</td>
+                        <td className="p-3 text-center">
+                          <input type="checkbox" checked={!!t.pagado} onChange={() => togglePagadoTercerizacion(t)} disabled={!canEdit}
+                            className="w-4 h-4 accent-emerald-600" />
+                        </td>
                         <td className="p-3 text-right">
                           <div className="flex items-center justify-end gap-3">
                             <button onClick={() => setDetalleModal(t)} className="text-xs text-slate-500 hover:underline">Ver detalle</button>
@@ -1317,6 +1338,7 @@ function Externa({ canEdit }: { canEdit: boolean }) {
                     <th className="p-3 font-medium text-center">Enviado</th>
                     <th className="p-3 font-medium text-center">Recibido</th>
                     <th className="p-3 font-medium text-center">Pendiente</th>
+                    <th className="p-3 font-medium text-center">Pagado</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1330,6 +1352,10 @@ function Externa({ canEdit }: { canEdit: boolean }) {
                         <td className="p-3 text-center">{t.cantidad_enviada}</td>
                         <td className="p-3 text-center">{recibido || '—'}</td>
                         <td className="p-3 text-center">{Number(t.cantidad_enviada) - recibido > 0 ? Number(t.cantidad_enviada) - recibido : <span className="text-emerald-600">✓</span>}</td>
+                        <td className="p-3 text-center">
+                          <input type="checkbox" checked={!!t.pagado} onChange={() => togglePagadoTercerizacion(t)} disabled={!canEdit}
+                            className="w-4 h-4 accent-emerald-600" />
+                        </td>
                       </tr>
                     )
                   })}
@@ -1379,6 +1405,12 @@ function Externa({ canEdit }: { canEdit: boolean }) {
                     ? `$${(detalleModal.cantidad_enviada * detalleModal.precio_unitario).toLocaleString('es-AR')}`
                     : '—'}
                 </p>
+              </div>
+              <div className="col-span-2 bg-slate-50 rounded-lg p-3 flex items-center justify-between">
+                <span className="text-xs text-slate-500">Estado de pago</span>
+                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${detalleModal.pagado ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                  {detalleModal.pagado ? 'Pagado' : 'Pendiente'}
+                </span>
               </div>
             </div>
 
