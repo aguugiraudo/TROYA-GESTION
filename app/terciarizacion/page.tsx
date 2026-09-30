@@ -1148,9 +1148,32 @@ function Externa({ canEdit }: { canEdit: boolean }) {
   const [ry, rm] = reporteMonth.split('-').map(Number)
   const reporteStart = `${reporteMonth}-01`
   const reporteEnd = new Date(ry, rm, 1).toISOString().split('T')[0]
-  const enviosDelMes = tercerizaciones.filter((t) => t.fecha_envio >= reporteStart && t.fecha_envio < reporteEnd)
-  const totalMesCantidad = enviosDelMes.reduce((s, t) => s + Number(t.cantidad_enviada), 0)
-  const totalMesValor = enviosDelMes.reduce((s, t) => s + Number(t.cantidad_enviada) * Number(t.precio_unitario || 0), 0)
+  const enviosDelMesBase = tercerizaciones.filter((t) => t.fecha_envio >= reporteStart && t.fecha_envio < reporteEnd)
+  const totalMesCantidad = enviosDelMesBase.reduce((s, t) => s + Number(t.cantidad_enviada), 0)
+  const totalMesValor = enviosDelMesBase.reduce((s, t) => s + Number(t.cantidad_enviada) * Number(t.precio_unitario || 0), 0)
+
+  const [reporteSortBy, setReporteSortBy] = useState<'fecha' | 'producto' | 'proveedor' | 'enviado' | 'recibido' | 'pendiente'>('fecha')
+  const [reporteSortDir, setReporteSortDir] = useState<1 | -1>(-1)
+
+  function toggleReporteSort(col: typeof reporteSortBy) {
+    if (reporteSortBy === col) setReporteSortDir(reporteSortDir === 1 ? -1 : 1)
+    else { setReporteSortBy(col); setReporteSortDir(1) }
+  }
+
+  const enviosDelMes = [...enviosDelMesBase].sort((a, b) => {
+    let av: any, bv: any
+    if (reporteSortBy === 'fecha') { av = a.fecha_envio; bv = b.fecha_envio }
+    else if (reporteSortBy === 'producto') { av = a.orders?.products?.name || ''; bv = b.orders?.products?.name || '' }
+    else if (reporteSortBy === 'proveedor') { av = a.proveedor_nombre || ''; bv = b.proveedor_nombre || '' }
+    else if (reporteSortBy === 'enviado') { av = Number(a.cantidad_enviada); bv = Number(b.cantidad_enviada) }
+    else if (reporteSortBy === 'recibido') { av = recibidoAcumulado(a.id); bv = recibidoAcumulado(b.id) }
+    else { av = Number(a.cantidad_enviada) - recibidoAcumulado(a.id); bv = Number(b.cantidad_enviada) - recibidoAcumulado(b.id) }
+    if (typeof av === 'string') av = av.toLowerCase()
+    if (typeof bv === 'string') bv = bv.toLowerCase()
+    if (av < bv) return -1 * reporteSortDir
+    if (av > bv) return 1 * reporteSortDir
+    return 0
+  })
 
   if (loading) return <p className="text-slate-500">Cargando...</p>
 
@@ -1332,12 +1355,26 @@ function Externa({ canEdit }: { canEdit: boolean }) {
               <table className="w-full text-sm border-collapse">
                 <thead>
                   <tr className="bg-slate-900 text-white text-left">
-                    <th className="p-3 font-medium">Fecha</th>
-                    <th className="p-3 font-medium">OP / Producto</th>
-                    <th className="p-3 font-medium">Proveedor</th>
-                    <th className="p-3 font-medium text-center">Enviado</th>
-                    <th className="p-3 font-medium text-center">Recibido</th>
-                    <th className="p-3 font-medium text-center">Pendiente</th>
+                    {([
+                      ['fecha', 'Fecha'],
+                      ['producto', 'OP / Producto'],
+                      ['proveedor', 'Proveedor'],
+                    ] as [typeof reporteSortBy, string][]).map(([col, label]) => (
+                      <th key={col} onClick={() => toggleReporteSort(col)}
+                        className="p-3 font-medium cursor-pointer select-none hover:bg-slate-800">
+                        {label} {reporteSortBy === col ? (reporteSortDir === 1 ? '▲' : '▼') : ''}
+                      </th>
+                    ))}
+                    {([
+                      ['enviado', 'Enviado'],
+                      ['recibido', 'Recibido'],
+                      ['pendiente', 'Pendiente'],
+                    ] as [typeof reporteSortBy, string][]).map(([col, label]) => (
+                      <th key={col} onClick={() => toggleReporteSort(col)}
+                        className="p-3 font-medium text-center cursor-pointer select-none hover:bg-slate-800">
+                        {label} {reporteSortBy === col ? (reporteSortDir === 1 ? '▲' : '▼') : ''}
+                      </th>
+                    ))}
                     <th className="p-3 font-medium text-center">Pagado</th>
                   </tr>
                 </thead>
