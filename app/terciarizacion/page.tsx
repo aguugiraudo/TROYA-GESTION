@@ -406,6 +406,11 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
     totalGeneralPorTercero[nombre] = { horas, total, pagado, pendiente: total - pagado }
   })
 
+  const totalManoDeObra = Object.values(totalGeneralPorTercero).reduce((s, v) => s + v.total, 0)
+  const totalPagadoManoDeObra = Object.values(totalGeneralPorTercero).reduce((s, v) => s + v.pagado, 0)
+  const totalPendienteManoDeObra = totalManoDeObra - totalPagadoManoDeObra
+  const totalTerciarizacion = totalManoDeObra + (externaResumen ? externaTotal : 0)
+
   if (loading) return <p className="text-slate-500">Cargando...</p>
 
   return (
@@ -512,40 +517,69 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
         </div>
       )}
 
-      {/* Resumen del mes primero (lo más importante de un vistazo), en tabla prolija */}
+      {/* Resumen ejecutivo del mes: total general, desglose, y control de pagos — arriba de todo */}
       {mostrarValores && Object.keys(totalGeneralPorTercero).length > 0 && (
-        <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 mb-6 overflow-x-auto">
-          <p className="text-xs font-bold text-slate-800 uppercase tracking-wide mb-3">Resumen del mes</p>
-          <table className="w-full text-sm border-collapse">
-            <thead>
-              <tr className="text-left text-slate-400 text-xs border-b border-slate-200">
-                <th className="pb-2">Persona</th>
-                <th className="pb-2 text-center">Horas</th>
-                <th className="pb-2 text-right">Total generado</th>
-                <th className="pb-2 text-right">Pagado</th>
-                <th className="pb-2 text-right">Pendiente</th>
-              </tr>
-            </thead>
-            <tbody>
-              {Object.entries(totalGeneralPorTercero).map(([nombre, info]) => (
-                <tr key={nombre} className="border-b border-slate-50 last:border-0">
-                  <td className="py-2 font-medium text-slate-700">{nombre}</td>
-                  <td className="py-2 text-center text-slate-500">{info.horas}</td>
-                  <td className="py-2 text-right text-slate-700">${info.total.toLocaleString('es-AR')}</td>
-                  <td className="py-2 text-right text-emerald-600">${info.pagado.toLocaleString('es-AR')}</td>
-                  <td className={`py-2 text-right font-semibold ${info.pendiente > 0 ? 'text-rose-600' : 'text-slate-400'}`}>
-                    ${info.pendiente.toLocaleString('es-AR')}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {externaResumen && (
-            <div className="mt-4 flex items-center justify-between text-sm bg-slate-50 rounded-lg px-3 py-2.5">
-              <span className="text-slate-600">+ Tercerización externa (envíos del mes)</span>
-              <span className="text-slate-800 font-semibold">${externaTotal.toLocaleString('es-AR')}</span>
+        <div className="space-y-4 mb-6">
+          {/* Total general + desglose */}
+          <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-5">
+            <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">Terciarización total del mes</p>
+            <p className="text-3xl font-semibold text-slate-800 mb-4">${totalTerciarizacion.toLocaleString('es-AR')}</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-3 border-t border-slate-100">
+              <div className="flex items-center justify-between sm:block">
+                <p className="text-xs text-slate-400">Mano de obra</p>
+                <p className="text-lg font-medium text-slate-700">${totalManoDeObra.toLocaleString('es-AR')}</p>
+              </div>
+              {externaResumen && (
+                <div className="flex items-center justify-between sm:block">
+                  <p className="text-xs text-slate-400">Tercerización externa</p>
+                  <p className="text-lg font-medium text-slate-700">${externaTotal.toLocaleString('es-AR')}</p>
+                </div>
+              )}
             </div>
-          )}
+          </div>
+
+          {/* Control de pagos — solo mano de obra, que es lo que se marca Pagado/Pendiente */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4">
+              <p className="text-xs text-slate-400 mb-1">Pagado (mano de obra)</p>
+              <p className="text-xl font-semibold text-slate-700">${totalPagadoManoDeObra.toLocaleString('es-AR')}</p>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4">
+              <p className="text-xs text-slate-400 mb-1">Pendiente de pago</p>
+              <p className={`text-xl font-semibold ${totalPendienteManoDeObra > 0 ? 'text-amber-600' : 'text-slate-700'}`}>
+                ${totalPendienteManoDeObra.toLocaleString('es-AR')}
+              </p>
+            </div>
+          </div>
+
+          {/* Detalle por persona */}
+          <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 overflow-x-auto">
+            <p className="text-xs font-bold text-slate-800 uppercase tracking-wide mb-3">Detalle por persona</p>
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="text-left text-slate-400 text-xs border-b border-slate-200">
+                  <th className="pb-2">Persona</th>
+                  <th className="pb-2 text-center">Horas</th>
+                  <th className="pb-2 text-right">Total generado</th>
+                  <th className="pb-2 text-right">Pagado</th>
+                  <th className="pb-2 text-right">Pendiente</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(totalGeneralPorTercero).map(([nombre, info]) => (
+                  <tr key={nombre} className="border-b border-slate-50 last:border-0">
+                    <td className="py-2 font-medium text-slate-700">{nombre}</td>
+                    <td className="py-2 text-center text-slate-500">{info.horas}</td>
+                    <td className="py-2 text-right text-slate-600">${info.total.toLocaleString('es-AR')}</td>
+                    <td className="py-2 text-right text-slate-500">${info.pagado.toLocaleString('es-AR')}</td>
+                    <td className={`py-2 text-right font-medium ${info.pendiente > 0 ? 'text-amber-600' : 'text-slate-400'}`}>
+                      ${info.pendiente.toLocaleString('es-AR')}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
