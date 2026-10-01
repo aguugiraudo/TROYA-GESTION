@@ -439,13 +439,13 @@ export default function MateriaPrimaPage() {
 
   const materialTotalsSorted = sortMaterials(materialTotalsList)
 
-  // A comprar = lo que necesito, en unidades de presentación (chapas), menos el Stock teórico actual
-  // (el mismo que exportás en Inventario — asegurate de tenerlo al día antes de mirar esta columna).
+  // A comprar = lo que necesito, en unidades de presentación (chapas si la hay, o la unidad base
+  // si no), menos el Stock actual. Funciona igual tenga presentación >1 o =1 (bulones, tuercas, etc.)
   function aComprarInfo(m: typeof materialTotalsList[number]) {
-    if (m.presentacion <= 1) return { aComprar: null, disponible: null }
-    const necesarioEnPresentacion = m.total / m.presentacion
+    const pres = m.presentacion > 0 ? m.presentacion : 1
+    const necesarioEnPresentacion = m.total / pres
     const stockActual = stockByMaterial[m.materialId] || 0
-    const disponible = Math.round((stockActual / m.presentacion) * 100) / 100
+    const disponible = Math.round((stockActual / pres) * 100) / 100
     const aComprar = Math.max(0, Math.ceil(necesarioEnPresentacion - disponible))
     return { aComprar, disponible }
   }
