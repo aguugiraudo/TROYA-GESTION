@@ -290,9 +290,13 @@ export default function MateriaPrimaPage() {
     }
     // Guardamos SIEMPRE la fecha y cantidad del conteo (aunque diera igual al teórico), para que el
     // Excel de Inventario refleje el último conteo real, no el stock teórico del momento de exportar
-    await supabase.from('materiales').update({
+    const { error: errorConteo } = await supabase.from('materiales').update({
       ultimo_conteo_fecha: today(), ultimo_conteo_cantidad: parseFloat(contadoInput),
     }).eq('id', m.id)
+    if (errorConteo) {
+      alert(`No se pudo guardar el último conteo de "${m.nombre}" (puede que falte correr el SQL que agrega esas columnas): ${errorConteo.message}`)
+      return
+    }
     setInvSavedDiffs((prev) => ({ ...prev, [m.id]: diferencia }))
     fetchAll()
   }
