@@ -356,6 +356,26 @@ export default function MateriaPrimaPage() {
     XLSX.writeFile(wb, `stock_materia_prima_${new Date().toISOString().split('T')[0]}.xlsx`)
   }
 
+  // Exporta la "foto" del cálculo de compras en el momento: qué necesitabas, cuánto stock tenías
+  // y cuánto había que pedir — así te queda registrado aunque después siga la producción y los
+  // números de Stock actual se sigan moviendo.
+  function exportCalculadoraToExcel() {
+    if (materialTotalsSorted.length === 0) {
+      alert('Cargá productos y cantidades en la calculadora antes de exportar.')
+      return
+    }
+    const header = ['Proveedor', 'C\u00F3digo', 'Material', 'Necesario', 'Stock actual (u.)', 'A comprar (u.)']
+    const rows = sortMaterials(materialTotalsSorted).map((m) => {
+      const { aComprar, disponible } = aComprarInfo(m)
+      return [m.proveedor, m.codigo || '', m.nombre, `${Math.round(m.total * 100) / 100} ${m.unidad}`, disponible, aComprar]
+    })
+    const ws = XLSX.utils.aoa_to_sheet([header, ...rows])
+    ws['!cols'] = [{ wch: 25 }, { wch: 10 }, { wch: 40 }, { wch: 16 }, { wch: 14 }, { wch: 14 }]
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Compras')
+    XLSX.writeFile(wb, `calculadora_compras_${new Date().toISOString().split('T')[0]}.xlsx`)
+  }
+
   async function removeProductMaterial(id: string) {
     if (!confirm('¿Quitar este material de la composición del producto?')) return
     await supabase.from('producto_materiales').delete().eq('id', id)
@@ -999,6 +1019,9 @@ export default function MateriaPrimaPage() {
                 <option value="codigo">Ordenar por código</option>
                 <option value="nombre">Ordenar por nombre (A-Z)</option>
               </select>
+              <button onClick={exportCalculadoraToExcel} className="text-xs border border-slate-300 text-slate-600 px-3 py-1.5 rounded-md hover:bg-slate-50">
+                ⬇ Exportar a Excel
+              </button>
             </div>
           </div>
           {materialTotalsSorted.length === 0 ? (
