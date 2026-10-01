@@ -98,6 +98,11 @@ export default function MateriaPrimaPage() {
     const { data: pmData } = await supabase.from('producto_materiales').select('*, materiales(nombre, unidad_medida, codigo, proveedor_nombre, presentacion, ultimo_conteo_fecha, ultimo_conteo_cantidad), sectors(name)')
     setAllProductMaterials(pmData || [])
 
+    const { data: draftData } = await supabase.from('compras_calculadora_draft').select('*, products(name)')
+    setCalcRows((draftData || []).map((d: any) => ({
+      productId: d.product_id, productName: d.products?.name || '', qty: d.qty != null ? String(d.qty) : '',
+    })))
+
     const { data: stockData } = await supabase.from('material_stock').select('*')
     const stockMap: Record<string, number> = {}
     ;(stockData || []).forEach((r: any) => { stockMap[r.material_id] = Number(r.stock_actual) })
@@ -312,15 +317,19 @@ export default function MateriaPrimaPage() {
 
   // Exporta el ÚLTIMO CONTEO FÍSICO guardado de cada material (no el teórico), sin importar el filtro
   // de ubicación que tengas puesto en pantalla — siempre trae TODOS los materiales.
+  // Exporta el stock teórico actual (lo que ya está cargado por ingresos/consumo/ajustes) de TODOS
+  // los materiales, sin importar el filtro de ubicación. Asegurate de guardar cualquier corrección
+  // en Inventario antes de exportar, para que este número coincida con lo físico real.
   function exportInventarioToExcel() {
-    const header = ['C\u00F3digo', 'Material', 'Ubicaci\u00F3n', 'Proveedor', '\u00DAltimo conteo (fecha)', 'Cantidad contada (u.)']
-    const rows = materiales.map((m) => [
-      m.codigo || '', m.nombre, m.ubicacion || '', m.proveedor_nombre || '',
-      m.ultimo_conteo_fecha ? m.ultimo_conteo_fecha.split('-').reverse().join('/') : 'Sin contar todav\u00EDa',
-      m.ultimo_conteo_cantidad != null ? m.ultimo_conteo_cantidad : '',
-    ])
+    const header = ['C\u00F3digo', 'Material', 'Ubicaci\u00F3n', 'Proveedor', 'Stock actual (u.)']
+    const rows = materiales.map((m) => {
+      const pres = Number(m.presentacion || 1)
+      const stock = stockByMaterial[m.id] || 0
+      const stockEnPresentacion = pres > 1 ? stock / pres : stock
+      return [m.codigo || '', m.nombre, m.ubicacion || '', m.proveedor_nombre || '', Math.round(stockEnPresentacion * 100) / 100]
+    })
     const ws = XLSX.utils.aoa_to_sheet([header, ...rows])
-    ws['!cols'] = [{ wch: 10 }, { wch: 40 }, { wch: 20 }, { wch: 25 }, { wch: 16 }, { wch: 16 }]
+    ws['!cols'] = [{ wch: 10 }, { wch: 40 }, { wch: 20 }, { wch: 25 }, { wch: 16 }]
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'Inventario')
     XLSX.writeFile(wb, `inventario_materia_prima_${new Date().toISOString().split('T')[0]}.xlsx`)
@@ -363,27 +372,35 @@ export default function MateriaPrimaPage() {
     ? products.filter((p) => p.name.toLowerCase().includes(calcSearch.toLowerCase()) || p.code.includes(calcSearch))
     : products
 
-  function addCalcRow(p: any) {
+  async function addCalcRow(p: any) {
     if (calcRows.some((r) => r.productId === p.id)) { setCalcSearch(''); setCalcShowList(false); return }
     setCalcRows((prev) => [...prev, { productId: p.id, productName: p.name, qty: '' }])
     setCalcSearch(''); setCalcShowList(false)
+    await supabase.from('compras_calculadora_draft').upsert({ product_id: p.id, qty: null }, { onConflict: 'product_id' })
   }
 
   function updateCalcQty(productId: string, qty: string) {
     setCalcRows((prev) => prev.map((r) => (r.productId === productId ? { ...r, qty } : r)))
   }
 
-  function removeCalcRow(productId: string) {
-    setCalcRows((prev) => prev.filter((r) => r.productId !== productId))
+  async function saveCalcQty(productId: string, qty: string) {
+    const val = qty === '' ? null : parseFloat(qty)
+    await supabase.from('compras_calculadora_draft').upsert({ product_id: productId, qty: val }, { onConflict: 'product_id' })
   }
 
-  function clearCalc() {
+  async function removeCalcRow(productId: string) {
+    setCalcRows((prev) => prev.filter((r) => r.productId !== productId))
+    await supabase.from('compras_calculadora_draft').delete().eq('product_id', productId)
+  }
+
+  async function clearCalc() {
     if (calcRows.length > 0 && !confirm('¿Vaciar la calculadora?')) return
     setCalcRows([])
+    await supabase.from('compras_calculadora_draft').delete().not('id', 'is', null)
   }
 
   // Total de materiales necesarios según las cantidades cargadas
-  const materialTotals: Record<string, { nombre: string; codigo: string; proveedor: string; unidad: string; presentacion: number; total: number; ultimoConteoFecha: string | null; ultimoConteoCantidad: number | null }> = {}
+  const materialTotals: Record<string, { materialId: string; nombre: string; codigo: string; proveedor: string; unidad: string; presentacion: number; total: number }> = {}
   calcRows.forEach((row) => {
     const qty = parseFloat(row.qty || '0')
     if (!qty) return
@@ -392,14 +409,13 @@ export default function MateriaPrimaPage() {
       const key = pm.material_id
       if (!materialTotals[key]) {
         materialTotals[key] = {
+          materialId: key,
           nombre: pm.materiales?.nombre || 'Material',
           codigo: pm.materiales?.codigo || '',
           proveedor: pm.materiales?.proveedor_nombre || 'Sin proveedor',
           unidad: pm.materiales?.unidad_medida || 'u.',
           presentacion: Number(pm.materiales?.presentacion || 1),
           total: 0,
-          ultimoConteoFecha: pm.materiales?.ultimo_conteo_fecha || null,
-          ultimoConteoCantidad: pm.materiales?.ultimo_conteo_cantidad != null ? Number(pm.materiales.ultimo_conteo_cantidad) : null,
         }
       }
       materialTotals[key].total += qty * pm.cantidad_por_unidad
@@ -423,15 +439,15 @@ export default function MateriaPrimaPage() {
 
   const materialTotalsSorted = sortMaterials(materialTotalsList)
 
-  // A comprar = lo que necesito, en unidades de presentación (chapas), menos lo que el último conteo
-  // físico dice que ya tenés. Si nunca se contó ese material, no restamos nada (necesario completo)
-  // y lo marcamos aparte para que sepas que ese número todavía no está confirmado.
+  // A comprar = lo que necesito, en unidades de presentación (chapas), menos el Stock teórico actual
+  // (el mismo que exportás en Inventario — asegurate de tenerlo al día antes de mirar esta columna).
   function aComprarInfo(m: typeof materialTotalsList[number]) {
-    if (m.presentacion <= 1) return { aComprar: null, sinContar: m.ultimoConteoFecha == null }
+    if (m.presentacion <= 1) return { aComprar: null, disponible: null }
     const necesarioEnPresentacion = m.total / m.presentacion
-    const disponible = m.ultimoConteoCantidad ?? 0
+    const stockActual = stockByMaterial[m.materialId] || 0
+    const disponible = Math.round((stockActual / m.presentacion) * 100) / 100
     const aComprar = Math.max(0, Math.ceil(necesarioEnPresentacion - disponible))
-    return { aComprar, sinContar: m.ultimoConteoFecha == null }
+    return { aComprar, disponible }
   }
 
   const materialsByProveedor: Record<string, typeof materialTotalsList> = {}
@@ -960,6 +976,7 @@ export default function MateriaPrimaPage() {
                         type="number" placeholder="Cantidad"
                         value={row.qty}
                         onChange={(e) => updateCalcQty(row.productId, e.target.value)}
+                        onBlur={(e) => saveCalcQty(row.productId, e.target.value)}
                         className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-28 shrink-0"
                       />
                       <button onClick={() => removeCalcRow(row.productId)} className="text-xs text-rose-500 hover:underline shrink-0">Quitar</button>
@@ -997,31 +1014,23 @@ export default function MateriaPrimaPage() {
                         <th className="p-3 font-medium">Código</th>
                         <th className="p-3 font-medium">Material</th>
                         <th className="p-3 font-medium text-right">Necesario</th>
-                        <th className="p-3 font-medium text-right">Último conteo</th>
+                        <th className="p-3 font-medium text-right">Stock actual</th>
                         <th className="p-3 font-medium text-right">A comprar</th>
                       </tr>
                     </thead>
                     <tbody>
                       {sortMaterials(materialsByProveedor[prov]).map((m) => {
-                        const { aComprar, sinContar } = aComprarInfo(m)
+                        const { aComprar, disponible } = aComprarInfo(m)
                         return (
                           <tr key={m.nombre + m.codigo} className="border-t border-slate-100">
                             <td className="p-3 text-slate-400 text-xs">{m.codigo || '—'}</td>
                             <td className="p-3 text-slate-700 font-medium">{m.nombre}</td>
                             <td className="p-3 text-right text-slate-500">{Math.round(m.total * 100) / 100} {m.unidad}</td>
-                            <td className="p-3 text-right text-xs">
-                              {m.ultimoConteoCantidad != null ? (
-                                <span className="text-slate-500">{m.ultimoConteoCantidad} u. <span className="text-slate-400">({m.ultimoConteoFecha?.split('-').reverse().join('/')})</span></span>
-                              ) : (
-                                <span className="text-amber-600">sin contar</span>
-                              )}
+                            <td className="p-3 text-right text-xs text-slate-500">
+                              {disponible != null ? `${disponible} u.` : '—'}
                             </td>
-                            <td className="p-3 text-right font-semibold">
-                              {aComprar != null ? (
-                                <span className={sinContar ? 'text-amber-600' : 'text-slate-700'}>
-                                  {aComprar} u.{sinContar && ' ⚠'}
-                                </span>
-                              ) : '—'}
+                            <td className="p-3 text-right font-semibold text-slate-700">
+                              {aComprar != null ? `${aComprar} u.` : '—'}
                             </td>
                           </tr>
                         )
@@ -1040,32 +1049,24 @@ export default function MateriaPrimaPage() {
                     <th className="p-3 font-medium">Material</th>
                     <th className="p-3 font-medium">Proveedor</th>
                     <th className="p-3 font-medium text-right">Necesario</th>
-                    <th className="p-3 font-medium text-right">Último conteo</th>
+                    <th className="p-3 font-medium text-right">Stock actual</th>
                     <th className="p-3 font-medium text-right">A comprar</th>
                   </tr>
                 </thead>
                 <tbody>
                   {materialTotalsSorted.map((m) => {
-                    const { aComprar, sinContar } = aComprarInfo(m)
+                    const { aComprar, disponible } = aComprarInfo(m)
                     return (
                       <tr key={m.nombre + m.codigo} className="border-t border-slate-100">
                         <td className="p-3 text-slate-400 text-xs">{m.codigo || '—'}</td>
                         <td className="p-3 text-slate-700 font-medium">{m.nombre}</td>
                         <td className="p-3 text-slate-500 text-xs">{m.proveedor}</td>
                         <td className="p-3 text-right text-slate-500">{Math.round(m.total * 100) / 100} {m.unidad}</td>
-                        <td className="p-3 text-right text-xs">
-                          {m.ultimoConteoCantidad != null ? (
-                            <span className="text-slate-500">{m.ultimoConteoCantidad} u. <span className="text-slate-400">({m.ultimoConteoFecha?.split('-').reverse().join('/')})</span></span>
-                          ) : (
-                            <span className="text-amber-600">sin contar</span>
-                          )}
+                        <td className="p-3 text-right text-xs text-slate-500">
+                          {disponible != null ? `${disponible} u.` : '—'}
                         </td>
-                        <td className="p-3 text-right font-semibold">
-                          {aComprar != null ? (
-                            <span className={sinContar ? 'text-amber-600' : 'text-slate-700'}>
-                              {aComprar} u.{sinContar && ' ⚠'}
-                            </span>
-                          ) : '—'}
+                        <td className="p-3 text-right font-semibold text-slate-700">
+                          {aComprar != null ? `${aComprar} u.` : '—'}
                         </td>
                       </tr>
                     )

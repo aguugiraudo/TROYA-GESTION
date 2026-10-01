@@ -120,6 +120,7 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
 
   const [externaTotal, setExternaTotal] = useState(0)
   const [externaPagado, setExternaPagado] = useState(0)
+  const [externaPorProveedor, setExternaPorProveedor] = useState<Record<string, { total: number; pagado: number }>>({})
 
   async function fetchAll() {
     setLoading(true)
@@ -154,12 +155,22 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
     setRegistrosProduccion(regProdData || [])
 
     if (externaResumen) {
-      const { data: tercData } = await supabase.from('tercerizaciones').select('cantidad_enviada, precio_unitario, fecha_envio, pagado')
+      const { data: tercData } = await supabase.from('tercerizaciones').select('proveedor_nombre, cantidad_enviada, precio_unitario, fecha_envio, pagado')
       const delMes = (tercData || []).filter((t: any) => t.fecha_envio >= monthStart && t.fecha_envio < monthEnd)
       const totalExt = delMes.reduce((s: number, t: any) => s + Number(t.cantidad_enviada) * Number(t.precio_unitario || 0), 0)
       const pagadoExt = delMes.filter((t: any) => t.pagado).reduce((s: number, t: any) => s + Number(t.cantidad_enviada) * Number(t.precio_unitario || 0), 0)
       setExternaTotal(totalExt)
       setExternaPagado(pagadoExt)
+
+      const porProveedor: Record<string, { total: number; pagado: number }> = {}
+      delMes.forEach((t: any) => {
+        const nombre = t.proveedor_nombre || 'Sin proveedor'
+        if (!porProveedor[nombre]) porProveedor[nombre] = { total: 0, pagado: 0 }
+        const valor = Number(t.cantidad_enviada) * Number(t.precio_unitario || 0)
+        porProveedor[nombre].total += valor
+        if (t.pagado) porProveedor[nombre].pagado += valor
+      })
+      setExternaPorProveedor(porProveedor)
     }
 
     setLoading(false)
@@ -591,6 +602,38 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
               </tbody>
             </table>
           </div>
+
+          {/* Detalle por proveedor (Tercerización Externa) */}
+          {externaResumen && Object.keys(externaPorProveedor).length > 0 && (
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 overflow-x-auto">
+              <p className="text-xs font-bold text-slate-800 uppercase tracking-wide mb-3">Detalle por proveedor (Externa)</p>
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="text-left text-slate-400 text-xs border-b border-slate-200">
+                    <th className="pb-2">Proveedor</th>
+                    <th className="pb-2 text-right">Total generado</th>
+                    <th className="pb-2 text-right">Pagado</th>
+                    <th className="pb-2 text-right">Pendiente</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(externaPorProveedor).sort((a, b) => (b[1].total - b[1].pagado) - (a[1].total - a[1].pagado)).map(([proveedor, info]) => {
+                    const pendiente = info.total - info.pagado
+                    return (
+                      <tr key={proveedor} className="border-b border-slate-50 last:border-0">
+                        <td className="py-2 font-medium text-slate-700">{proveedor}</td>
+                        <td className="py-2 text-right text-slate-600">${info.total.toLocaleString('es-AR')}</td>
+                        <td className="py-2 text-right text-slate-500">${info.pagado.toLocaleString('es-AR')}</td>
+                        <td className={`py-2 text-right font-medium ${pendiente > 0 ? 'text-amber-600' : 'text-slate-400'}`}>
+                          ${pendiente.toLocaleString('es-AR')}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
@@ -744,7 +787,17 @@ function ManoDeObra({ canEdit, mostrarValores, externaResumen }: { canEdit: bool
             const regsProd = registrosProduccionPorTercero[nombre] || []
             return (
             <div key={nombre} className="bg-white border border-slate-200 rounded-xl shadow-sm p-4">
-              <p className="text-sm font-medium text-slate-500 mb-2">{nombre}</p>
+              <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                <p className="text-sm font-medium text-slate-500">{nombre}</p>
+                {mostrarValores && totalGeneralPorTercero[nombre] && (
+                  <p className="text-xs text-slate-400">
+                    {totalGeneralPorTercero[nombre].horas} hs — Total ${totalGeneralPorTercero[nombre].total.toLocaleString('es-AR')} —
+                    {' '}<span className={totalGeneralPorTercero[nombre].pendiente > 0 ? 'text-amber-600 font-semibold' : 'text-slate-400'}>
+                      Le debo: ${totalGeneralPorTercero[nombre].pendiente.toLocaleString('es-AR')}
+                    </span>
+                  </p>
+                )}
+              </div>
               {regs.length > 0 && (
               <div className="overflow-x-auto mb-4">
                 <table className="w-full text-sm border-collapse table-fixed">
