@@ -88,7 +88,9 @@ export default function PlanTurnosPage() {
   const [clockResult, setClockResult] = useState<{ type: 'ok' | 'more' | 'less'; diffPerUnit: number; newMinutes: number } | null>(null)
 
   const [editingTarget, setEditingTarget] = useState<string | null>(null)
-  const [reassigningTask, setReassigningTask] = useState<string | null>(null)
+  const [reschedulingTask, setReschedulingTask] = useState<any | null>(null)
+  const [rescheduleDate, setRescheduleDate] = useState('')
+  const [rescheduleOperatorId, setRescheduleOperatorId] = useState('')
 
   const [loading, setLoading] = useState(true)
 
@@ -475,17 +477,59 @@ export default function PlanTurnosPage() {
     fetchTasksAndAvailability(); fetchStatic()
   }
 
-  // Reasigna una tarea YA CREADA a otro operario, sin tocar su cantidad ni su historial.
-  async function reassignOperator(task: any, newOperatorId: string) {
-    if (!newOperatorId || newOperatorId === task.operator_id) { setReassigningTask(null); return }
+  // Horas ya programadas de un operario en una fecha puntual (tareas + servicios) y su disponibilidad
+  // de ese día, para poder avisar si una tarea movida lo deja pasado de horas.
+  async function loadDayLoad(operatorId: string, date: string) {
+    const [{ data: opTasks }, { data: svcTasks }, { data: avail }] = await Promise.all([
+      supabase.from('operator_daily_tasks').select('hours_assigned').eq('operator_id', operatorId).eq('plan_date', date),
+      supabase.from('service_tasks').select('hours_assigned').eq('operator_id', operatorId).eq('plan_date', date),
+      supabase.from('operator_daily_availability').select('hours_available').eq('operator_id', operatorId).eq('plan_date', date).maybeSingle(),
+    ])
+    const programadas = [...(opTasks || []), ...(svcTasks || [])].reduce((s: number, t: any) => s + Number(t.hours_assigned || 0), 0)
+    return { programadas: Math.round(programadas * 100) / 100, disponibles: avail?.hours_available != null ? Number(avail.hours_available) : null }
+  }
+
+  // Reasigna una tarea YA CREADA: cambia el día, el operario, o las dos cosas, conservando cantidad,
+  // tiempo estándar, nido y observaciones. Si ya tiene Real cargado, el día queda bloqueado (se perdería
+  // el registro de lo que se hizo ese día) pero se puede corregir el operario.
+  function openReschedule(task: any) {
+    setReschedulingTask(task)
+    setRescheduleDate(task.plan_date)
+    setRescheduleOperatorId(task.operator_id)
+  }
+
+  async function confirmReschedule() {
+    const task = reschedulingTask
+    if (!task || !rescheduleDate || !rescheduleOperatorId) return
+    const cambiaDia = rescheduleDate !== task.plan_date
+    const cambiaOperario = rescheduleOperatorId !== task.operator_id
+    if (!cambiaDia && !cambiaOperario) { setReschedulingTask(null); return }
+
     if (task.actual_quantity != null) {
+      if (cambiaDia) {
+        alert('Esta tarea ya tiene un Real cargado, no se puede mover de día porque se perdería el registro de lo que se hizo. Si hay que repetir el trabajo otro día, creá una tarea nueva.')
+        return
+      }
       const proceed = confirm('Esta tarea ya tiene un Real cargado a nombre del operario actual. Si la reasignás, ese Real y ese rendimiento van a pasar a figurar del nuevo operario. ¿Continuar igual?')
-      if (!proceed) { setReassigningTask(null); return }
+      if (!proceed) return
     }
-    const { error } = await supabase.from('operator_daily_tasks').update({ operator_id: newOperatorId }).eq('id', task.id)
+
+    // Control de horas del operario de destino ese día
+    const carga = await loadDayLoad(rescheduleOperatorId, rescheduleDate)
+    const horasTarea = Number(task.hours_assigned || 0)
+    if (carga.disponibles != null && carga.programadas + horasTarea > carga.disponibles) {
+      const nombre = operators.find((o) => o.id === rescheduleOperatorId)?.full_name || 'Ese operario'
+      const proceed = confirm(`${nombre} ya tiene ${carga.programadas} de ${carga.disponibles} hs programadas el ${rescheduleDate.split('-').reverse().join('/')}. Con esta tarea llegaría a ${Math.round((carga.programadas + horasTarea) * 100) / 100} hs. ¿Reasignar igual?`)
+      if (!proceed) return
+    }
+
+    const { error } = await supabase.from('operator_daily_tasks')
+      .update({ plan_date: rescheduleDate, operator_id: rescheduleOperatorId })
+      .eq('id', task.id)
     if (error) { alert('Error al reasignar: ' + error.message); return }
-    setReassigningTask(null)
+    setReschedulingTask(null)
     fetchTasksAndAvailability(); fetchStatic()
+    if (cambiaDia) alert(`Listo: la tarea pasó al ${rescheduleDate.split('-').reverse().join('/')}. Para verla, cambiá la fecha arriba.`)
   }
 
   function openClock(task: any) {
@@ -924,28 +968,13 @@ export default function PlanTurnosPage() {
                             <td className="py-2 text-right">
                               {canEdit && (
                                 <div className="flex items-center justify-end gap-2 flex-wrap">
-                                  {reassigningTask === t.id ? (
-                                    <select
-                                      autoFocus
-                                      defaultValue=""
-                                      onChange={(e) => reassignOperator(t, e.target.value)}
-                                      onBlur={() => setReassigningTask(null)}
-                                      className="text-xs border border-blue-300 rounded-md px-1 py-1"
-                                    >
-                                      <option value="" disabled>Pasar a...</option>
-                                      {operators.filter((o) => o.id !== t.operator_id).map((o) => (
-                                        <option key={o.id} value={o.id}>{o.full_name}</option>
-                                      ))}
-                                    </select>
-                                  ) : (
-                                    <button
-                                      onClick={() => setReassigningTask(t.id)}
-                                      title="Pasarle esta tarea a otro operario, sin tocar la cantidad"
-                                      className="text-xs text-blue-600 hover:underline"
-                                    >
-                                      Reasignar
-                                    </button>
-                                  )}
+                                  <button
+                                    onClick={() => openReschedule(t)}
+                                    title="Cambiar el día y/o el operario de esta tarea, sin tocar la cantidad"
+                                    className="text-xs text-blue-600 hover:underline"
+                                  >
+                                    Reasignar
+                                  </button>
                                   <button onClick={() => deleteTask(t.id)} className="text-xs text-rose-500 hover:underline">Eliminar</button>
                                 </div>
                               )}
@@ -1088,27 +1117,12 @@ export default function PlanTurnosPage() {
                             className="w-full rounded-md border border-slate-300 py-1.5 px-2 text-xs min-w-0 disabled:bg-slate-50 disabled:text-slate-400"
                           />
                           {canEdit && (
-                            reassigningTask === t.id ? (
-                              <select
-                                autoFocus
-                                defaultValue=""
-                                onChange={(e) => reassignOperator(t, e.target.value)}
-                                onBlur={() => setReassigningTask(null)}
-                                className="mt-2 w-full text-xs border border-blue-300 rounded-md px-2 py-1.5"
-                              >
-                                <option value="" disabled>Pasarle esta tarea a...</option>
-                                {operators.filter((o) => o.id !== t.operator_id).map((o) => (
-                                  <option key={o.id} value={o.id}>{o.full_name}</option>
-                                ))}
-                              </select>
-                            ) : (
-                              <button
-                                onClick={() => setReassigningTask(t.id)}
-                                className="mt-2 text-xs text-blue-600 hover:underline"
-                              >
-                                Reasignar a otro operario
-                              </button>
-                            )
+                            <button
+                              onClick={() => openReschedule(t)}
+                              className="mt-2 text-xs text-blue-600 hover:underline"
+                            >
+                              Reasignar (día u operario)
+                            </button>
                           )}
                         </div>
                       ))}
@@ -1202,6 +1216,52 @@ export default function PlanTurnosPage() {
               </div>
             )
           })}
+        </div>
+      )}
+
+      {reschedulingTask && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setReschedulingTask(null)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-semibold text-slate-800 text-lg mb-1">Reasignar tarea</h3>
+            <p className="text-sm text-slate-500 mb-4">
+              #{reschedulingTask.orders?.order_number} — {reschedulingTask.orders?.products?.name} — {reschedulingTask.sectors?.name}
+              <span className="block text-xs text-slate-400 mt-0.5">
+                Hoy está el {reschedulingTask.plan_date.split('-').reverse().join('/')}, con {reschedulingTask.operators?.full_name}, {reschedulingTask.target_quantity} u.
+              </span>
+            </p>
+
+            {reschedulingTask.actual_quantity != null && (
+              <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
+                Esta tarea ya tiene Real cargado ({reschedulingTask.actual_quantity}): el día no se puede cambiar, pero sí el operario.
+              </p>
+            )}
+
+            <div className="mb-3">
+              <label className="text-xs text-slate-500">Día</label>
+              <input type="date" value={rescheduleDate} onChange={(e) => setRescheduleDate(e.target.value)}
+                disabled={reschedulingTask.actual_quantity != null}
+                className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1 disabled:bg-slate-50 disabled:text-slate-400" />
+            </div>
+            <div className="mb-4">
+              <label className="text-xs text-slate-500">Operario</label>
+              <select value={rescheduleOperatorId} onChange={(e) => setRescheduleOperatorId(e.target.value)}
+                className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1">
+                {operators.map((o) => <option key={o.id} value={o.id}>{o.full_name}</option>)}
+              </select>
+            </div>
+            <p className="text-xs text-blue-600 bg-blue-50 rounded px-2 py-1.5 mb-4">
+              Se mantiene la cantidad, el tiempo, el nido (si tiene) y las observaciones. Si cambiás el día, el objetivo pasa al día nuevo.
+            </p>
+
+            <div className="flex gap-2">
+              <button onClick={() => setReschedulingTask(null)} className="flex-1 border border-slate-300 rounded-md py-2 text-sm text-slate-600 hover:bg-slate-50">
+                Cancelar
+              </button>
+              <button onClick={confirmReschedule} className="flex-1 bg-blue-600 text-white rounded-md py-2 text-sm font-medium hover:bg-blue-700">
+                Reasignar
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

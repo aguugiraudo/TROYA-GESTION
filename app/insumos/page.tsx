@@ -33,6 +33,14 @@ export default function InsumosPage() {
 
   const [categorias, setCategorias] = useState<any[]>([])
   const [items, setItems] = useState<any[]>([])
+
+  // --- Insumos "a pedido" (sin stock mínimo: se piden cuando alguien los necesita) ---
+  const [solicitudes, setSolicitudes] = useState<any[]>([])
+  const [pedirItem, setPedirItem] = useState<any | null>(null)
+  const [pedirCantidad, setPedirCantidad] = useState('1')
+  const [pedirOperator, setPedirOperator] = useState('')
+  const [pedirNotas, setPedirNotas] = useState('')
+  const [editingSolCantidad, setEditingSolCantidad] = useState<string | null>(null)
   const [stockByItem, setStockByItem] = useState<Record<string, number>>({})
   const [operators, setOperators] = useState<any[]>([])
   const [movimientos, setMovimientos] = useState<any[]>([])
@@ -133,6 +141,13 @@ export default function InsumosPage() {
       .limit(60)
     setMovimientos(movData || [])
 
+    const { data: solData } = await supabase
+      .from('insumo_solicitudes')
+      .select('*, insumos(nombre, codigo, unidad_medida), operators(full_name)')
+      .eq('estado', 'pendiente')
+      .order('created_at', { ascending: false })
+    setSolicitudes(solData || [])
+
     setLoading(false)
   }
 
@@ -211,6 +226,48 @@ export default function InsumosPage() {
     fetchAll()
   }
 
+  async function toggleAPedido(item: any, value: boolean) {
+    const { error } = await supabase.from('insumos').update({ a_pedido: value }).eq('id', item.id)
+    if (error) { alert('Error al actualizar: ' + error.message + ' (¿corriste el SQL de "a pedido"?)'); return }
+    fetchAll()
+  }
+
+  function openPedir(item: any) {
+    setPedirItem(item); setPedirCantidad('1'); setPedirOperator(''); setPedirNotas('')
+  }
+
+  async function crearSolicitud() {
+    if (!pedirItem) return
+    const cantidad = parseFloat(pedirCantidad || '0')
+    if (!cantidad || cantidad <= 0) { alert('Ingresá una cantidad válida.'); return }
+    if (!pedirOperator) { alert('Elegí quién lo pide.'); return }
+    const { error } = await supabase.from('insumo_solicitudes').insert({
+      insumo_id: pedirItem.id, cantidad, operator_id: pedirOperator, notas: pedirNotas.trim() || null, fecha: today(),
+    })
+    if (error) { alert('Error al registrar el pedido: ' + error.message); return }
+    setPedirItem(null)
+    fetchAll()
+  }
+
+  async function saveSolicitudCantidad(id: string, value: string) {
+    const cantidad = parseFloat(value || '0')
+    setEditingSolCantidad(null)
+    if (!cantidad || cantidad <= 0) return
+    await supabase.from('insumo_solicitudes').update({ cantidad }).eq('id', id)
+    fetchAll()
+  }
+
+  async function cancelarSolicitud(id: string) {
+    if (!confirm('¿Cancelar este pedido? Deja de aparecer en el Excel de compra.')) return
+    await supabase.from('insumo_solicitudes').delete().eq('id', id)
+    fetchAll()
+  }
+
+  async function marcarSolicitudRecibida(id: string) {
+    await supabase.from('insumo_solicitudes').update({ estado: 'recibida' }).eq('id', id)
+    fetchAll()
+  }
+
   async function saveItemStockMinimo(id: string, value: string) {
     const val = Math.max(0, parseFloat(value || '0'))
     const { error } = await supabase.from('insumos').update({ stock_minimo: val }).eq('id', id)
@@ -251,6 +308,8 @@ export default function InsumosPage() {
       operator_id: inOperatorId, motivo: inMotivo || null, fecha: inFecha,
     })
     if (error) { alert('Error al registrar el ingreso: ' + error.message); return }
+    // Si había pedidos "a pedido" pendientes de este ítem, con la llegada se dan por recibidos
+    await supabase.from('insumo_solicitudes').update({ estado: 'recibida' }).eq('insumo_id', inItem.id).eq('estado', 'pendiente')
     resetIngresoForm()
     fetchAll()
   }
@@ -318,29 +377,39 @@ export default function InsumosPage() {
     }
   }
 
-  // Resumen de compra: solo los ítems cuyo stock actual quedó por debajo del mínimo.
+  // Resumen de compra: (1) los ítems con stock mínimo cuyo stock actual quedó por debajo, y
+  // (2) los pedidos "a pedido" que alguien marcó y todavía no llegaron.
   // Se descarga como .xlsx para que el encargado se lo mande a Agustín por mail o WhatsApp.
   function descargarResumenCompra() {
     const faltantes = items
+      .filter((it) => !it.a_pedido)
       .map((it) => ({ item: it, stock: stockByItem[it.id] || 0 }))
       .filter(({ item, stock }) => stock < item.stock_minimo)
 
-    if (faltantes.length === 0) {
-      alert('No hay ningún ítem por debajo del stock mínimo — no hace falta pedir nada.')
+    if (faltantes.length === 0 && solicitudes.length === 0) {
+      alert('No hay ningún ítem por debajo del stock mínimo ni pedidos a pedido pendientes — no hace falta pedir nada.')
       return
     }
 
-    const header = ['C\u00F3digo', 'Art\u00EDculo', 'Stock m\u00EDnimo', 'Stock actual', 'Cantidad a pedir']
-    const rows = faltantes.map(({ item, stock }) => [
+    const header = ['C\u00F3digo', 'Art\u00EDculo', 'Stock m\u00EDnimo', 'Stock actual', 'Cantidad a pedir', 'Motivo']
+    const rowsMinimo = faltantes.map(({ item, stock }) => [
       item.codigo || '', item.nombre, item.stock_minimo, stock,
-      Math.ceil(item.stock_minimo - stock),
+      Math.ceil(item.stock_minimo - stock), 'Bajo stock m\u00EDnimo',
     ])
-    const ws = XLSX.utils.aoa_to_sheet([header, ...rows])
-    ws['!cols'] = [{ wch: 10 }, { wch: 40 }, { wch: 14 }, { wch: 14 }, { wch: 16 }]
+    const rowsAPedido = solicitudes.map((s: any) => [
+      s.insumos?.codigo || '', s.insumos?.nombre || '', 'A pedido', stockByItem[s.insumo_id] || 0,
+      Number(s.cantidad),
+      `Pedido por ${s.operators?.full_name || '\u2014'} el ${s.fecha.split('-').reverse().join('/')}${s.notas ? ` \u2014 ${s.notas}` : ''}`,
+    ])
+    const ws = XLSX.utils.aoa_to_sheet([header, ...rowsMinimo, ...rowsAPedido])
+    ws['!cols'] = [{ wch: 10 }, { wch: 40 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 45 }]
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'Compra')
     XLSX.writeFile(wb, `compra_insumos_${today()}.xlsx`)
   }
+
+  const pendientesPorItem: Record<string, number> = {}
+  solicitudes.forEach((s: any) => { pendientesPorItem[s.insumo_id] = (pendientesPorItem[s.insumo_id] || 0) + 1 })
 
   const itemsByCategoria: Record<string, any[]> = {}
   const sinCategoria: any[] = []
@@ -394,6 +463,23 @@ export default function InsumosPage() {
                   'Apretá "Guardar todos los conteos" — el sistema corrige el stock solo, no hace falta calcular nada.',
                   'Apretá "⬇ Descargar resumen de compra" — baja un Excel con SOLO los ítems que quedaron por debajo del mínimo (código, artículo, mínimo, actual, cuánto pedir). Si todo está bien, avisa que no hace falta pedir nada.',
                   'Mandale ese Excel a Agustín por WhatsApp o mail.',
+                ].map((texto, i) => (
+                  <li key={i} className="flex gap-3">
+                    <span className="shrink-0 w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center">{i + 1}</span>
+                    <span className="pt-0.5">{texto}</span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+
+            <div>
+              <p className="font-semibold text-slate-800 mb-2">Ítems "a pedido" (filtros, torchas, lo que no lleva stock mínimo)</p>
+              <ol className="space-y-2">
+                {[
+                  'En Stock, debajo del stock mínimo de ese ítem, tocá "marcar a pedido". Deja de avisar "stock bajo" y pasa a decir "A pedido".',
+                  'Cuando alguien necesite uno, tocá "Pedir" en la fila de ese ítem: elegí quién lo pide, la cantidad y, si querés, una nota (modelo, máquina).',
+                  'El pedido queda en el recuadro amarillo de arriba y sale en el Excel de "Descargar resumen de compra", junto con lo que está bajo mínimo.',
+                  'Cuando llegue, cargalo en Ingresos: el pedido se da por recibido solo. También podés tocar "Recibido" o "Cancelar" a mano.',
                 ].map((texto, i) => (
                   <li key={i} className="flex gap-3">
                     <span className="shrink-0 w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center">{i + 1}</span>
@@ -484,6 +570,44 @@ export default function InsumosPage() {
             </div>
           )}
 
+          {solicitudes.length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl shadow-sm p-4 mb-6">
+              <p className="text-xs font-bold text-amber-800 uppercase tracking-wide mb-1">Pedidos a pedido pendientes ({solicitudes.length})</p>
+              <p className="text-xs text-amber-700 mb-3">Aparecen en el Excel de "Descargar resumen de compra". Se dan por recibidos solos cuando cargás el Ingreso de ese ítem.</p>
+              <div className="space-y-2">
+                {solicitudes.map((s: any) => (
+                  <div key={s.id} className="flex items-center justify-between gap-3 bg-white rounded-lg px-3 py-2 text-sm flex-wrap">
+                    <div className="min-w-0">
+                      <p className="font-medium text-slate-700">{s.insumos?.nombre}</p>
+                      <p className="text-xs text-slate-400">
+                        Pidió {s.operators?.full_name || '—'} el {s.fecha.split('-').reverse().join('/')}{s.notas ? ` — ${s.notas}` : ''}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0">
+                      {canEdit && editingSolCantidad === s.id ? (
+                        <input type="number" autoFocus defaultValue={s.cantidad}
+                          onBlur={(e) => saveSolicitudCantidad(s.id, e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                          className="w-16 text-center rounded-md border border-blue-300 py-0.5 text-xs" />
+                      ) : (
+                        <button onClick={() => canEdit && setEditingSolCantidad(s.id)} disabled={!canEdit}
+                          className={`text-slate-700 font-semibold ${canEdit ? 'hover:underline decoration-dotted' : ''}`}>
+                          {s.cantidad} {s.insumos?.unidad_medida}
+                        </button>
+                      )}
+                      {canEdit && (
+                        <>
+                          <button onClick={() => marcarSolicitudRecibida(s.id)} className="text-xs text-emerald-600 hover:underline">Recibido</button>
+                          <button onClick={() => cancelarSolicitud(s.id)} className="text-xs text-rose-500 hover:underline">Cancelar</button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="flex items-center justify-between mb-3">
             <h2 className="font-semibold text-slate-700">Catálogo de ítems y stock</h2>
             {canEdit && (
@@ -500,13 +624,13 @@ export default function InsumosPage() {
               {categorias.filter((c) => itemsByCategoria[c.id]?.length > 0).map((c) => (
                 <div key={c.id}>
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">{c.nombre}</p>
-                  <ItemsTable items={itemsByCategoria[c.id]} stockByItem={stockByItem} canEdit={canEdit} onDelete={deleteItem} onSelect={openItemHistory} onSaveCodigo={saveItemCodigo} onSaveNombre={saveItemNombre} onSaveUnidad={saveItemUnidad} onSaveStockMinimo={saveItemStockMinimo} />
+                  <ItemsTable items={itemsByCategoria[c.id]} stockByItem={stockByItem} canEdit={canEdit} onDelete={deleteItem} onSelect={openItemHistory} onSaveCodigo={saveItemCodigo} onSaveNombre={saveItemNombre} onSaveUnidad={saveItemUnidad} onSaveStockMinimo={saveItemStockMinimo} onToggleAPedido={toggleAPedido} onPedir={openPedir} pendientesPorItem={pendientesPorItem} />
                 </div>
               ))}
               {sinCategoria.length > 0 && (
                 <div>
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Sin categoría</p>
-                  <ItemsTable items={sinCategoria} stockByItem={stockByItem} canEdit={canEdit} onDelete={deleteItem} onSelect={openItemHistory} onSaveCodigo={saveItemCodigo} onSaveNombre={saveItemNombre} onSaveUnidad={saveItemUnidad} onSaveStockMinimo={saveItemStockMinimo} />
+                  <ItemsTable items={sinCategoria} stockByItem={stockByItem} canEdit={canEdit} onDelete={deleteItem} onSelect={openItemHistory} onSaveCodigo={saveItemCodigo} onSaveNombre={saveItemNombre} onSaveUnidad={saveItemUnidad} onSaveStockMinimo={saveItemStockMinimo} onToggleAPedido={toggleAPedido} onPedir={openPedir} pendientesPorItem={pendientesPorItem} />
                 </div>
               )}
             </div>
@@ -811,7 +935,9 @@ export default function InsumosPage() {
                           <td className="p-3 text-center text-slate-500">{egresos.length}</td>
                           <td className="p-3 text-center text-slate-500">{frecuenciaTexto}</td>
                           <td className="p-3 text-center">
-                            {canEdit && editingStockMinimoConsumo === item.id ? (
+                            {item.a_pedido ? (
+                              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">A pedido</span>
+                            ) : canEdit && editingStockMinimoConsumo === item.id ? (
                               <input type="number" autoFocus defaultValue={item.stock_minimo}
                                 onBlur={(e) => { saveItemStockMinimo(item.id, e.target.value); setEditingStockMinimoConsumo(null) }}
                                 onKeyDown={(ev) => { if (ev.key === 'Enter') ev.currentTarget.blur() }}
@@ -835,6 +961,44 @@ export default function InsumosPage() {
             )
           })()}
         </>
+      )}
+
+      {/* MODAL: pedir un ítem "a pedido" */}
+      {pedirItem && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setPedirItem(null)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-semibold text-slate-800 text-lg mb-1">Pedir: {pedirItem.nombre}</h3>
+            <p className="text-sm text-slate-500 mb-4">Queda anotado y aparece en el Excel de compra hasta que llegue.</p>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-500">Cantidad ({pedirItem.unidad_medida})</label>
+                <input type="number" value={pedirCantidad} onChange={(e) => setPedirCantidad(e.target.value)}
+                  className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1" />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">¿Quién lo pide?</label>
+                <select value={pedirOperator} onChange={(e) => setPedirOperator(e.target.value)}
+                  className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1">
+                  <option value="">Elegí un operario...</option>
+                  {operators.map((o) => <option key={o.id} value={o.id}>{o.full_name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">Nota (opcional — ej: modelo, para qué máquina)</label>
+                <input value={pedirNotas} onChange={(e) => setPedirNotas(e.target.value)}
+                  className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1" />
+              </div>
+            </div>
+            <div className="flex gap-2 mt-5">
+              <button onClick={() => setPedirItem(null)} className="flex-1 border border-slate-300 rounded-md py-2 text-sm text-slate-600 hover:bg-slate-50">
+                Cancelar
+              </button>
+              <button onClick={crearSolicitud} className="flex-1 bg-blue-600 text-white rounded-md py-2 text-sm font-medium hover:bg-blue-700">
+                Registrar pedido
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* MODAL nuevo ítem */}
@@ -943,10 +1107,11 @@ export default function InsumosPage() {
   )
 }
 
-function ItemsTable({ items, stockByItem, canEdit, onDelete, onSelect, onSaveCodigo, onSaveNombre, onSaveUnidad, onSaveStockMinimo }: {
+function ItemsTable({ items, stockByItem, canEdit, onDelete, onSelect, onSaveCodigo, onSaveNombre, onSaveUnidad, onSaveStockMinimo, onToggleAPedido, onPedir, pendientesPorItem }: {
   items: any[]; stockByItem: Record<string, number>; canEdit: boolean; onDelete: (id: string) => void; onSelect: (item: any) => void
   onSaveCodigo: (id: string, value: string) => void; onSaveNombre: (id: string, value: string) => void
   onSaveUnidad: (id: string, value: string) => void; onSaveStockMinimo: (id: string, value: string) => void
+  onToggleAPedido: (item: any, value: boolean) => void; onPedir: (item: any) => void; pendientesPorItem: Record<string, number>
 }) {
   const [editingField, setEditingField] = useState<{ id: string; field: 'codigo' | 'nombre' | 'unidad' | 'stock_minimo' } | null>(null)
 
@@ -971,7 +1136,9 @@ function ItemsTable({ items, stockByItem, canEdit, onDelete, onSelect, onSaveCod
         <tbody>
           {items.map((it) => {
             const stock = stockByItem[it.id] || 0
-            const bajo = stock < it.stock_minimo
+            const aPedido = !!it.a_pedido
+            const bajo = !aPedido && stock < it.stock_minimo
+            const pendientes = pendientesPorItem[it.id] || 0
             return (
               <tr key={it.id} className="border-t border-slate-100">
                 <td className="p-3 text-slate-400 text-xs">
@@ -1021,28 +1188,57 @@ function ItemsTable({ items, stockByItem, canEdit, onDelete, onSelect, onSaveCod
                 </td>
                 <td className="p-3 text-center text-slate-600">{stock} {it.unidad_medida}</td>
                 <td className="p-3 text-center text-slate-400">
-                  {canEdit && isEditing(it.id, 'stock_minimo') ? (
-                    <input type="number" autoFocus defaultValue={it.stock_minimo}
-                      onBlur={(e) => { onSaveStockMinimo(it.id, e.target.value); setEditingField(null) }}
-                      onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
-                      className="w-16 text-center rounded-md border border-blue-300 py-0.5 text-xs" />
+                  {aPedido ? (
+                    <div className="flex flex-col items-center gap-1">
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">A pedido</span>
+                      {canEdit && (
+                        <button onClick={() => onToggleAPedido(it, false)} className="text-[10px] text-slate-400 hover:underline">usar stock mínimo</button>
+                      )}
+                    </div>
                   ) : (
-                    <button onClick={() => canEdit && setEditingField({ id: it.id, field: 'stock_minimo' })} disabled={!canEdit}
-                      className={canEdit ? 'hover:underline decoration-dotted' : ''}>
-                      {it.stock_minimo} {it.unidad_medida}
-                    </button>
+                    <div className="flex flex-col items-center gap-0.5">
+                      {canEdit && isEditing(it.id, 'stock_minimo') ? (
+                        <input type="number" autoFocus defaultValue={it.stock_minimo}
+                          onBlur={(e) => { onSaveStockMinimo(it.id, e.target.value); setEditingField(null) }}
+                          onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                          className="w-16 text-center rounded-md border border-blue-300 py-0.5 text-xs" />
+                      ) : (
+                        <button onClick={() => canEdit && setEditingField({ id: it.id, field: 'stock_minimo' })} disabled={!canEdit}
+                          className={canEdit ? 'hover:underline decoration-dotted' : ''}>
+                          {it.stock_minimo} {it.unidad_medida}
+                        </button>
+                      )}
+                      {canEdit && (
+                        <button onClick={() => onToggleAPedido(it, true)} className="text-[10px] text-slate-300 hover:text-slate-500 hover:underline">marcar a pedido</button>
+                      )}
+                    </div>
                   )}
                 </td>
                 <td className="p-3 text-center">
-                  <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-                    bajo ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'
-                  }`}>
-                    {bajo ? '⚠ Stock bajo' : 'OK'}
-                  </span>
+                  {aPedido ? (
+                    pendientes > 0 ? (
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                        ⏳ {pendientes} pedido{pendientes > 1 ? 's' : ''} pendiente{pendientes > 1 ? 's' : ''}
+                      </span>
+                    ) : (
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">Sin pedidos</span>
+                    )
+                  ) : (
+                    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                      bajo ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'
+                    }`}>
+                      {bajo ? '⚠ Stock bajo' : 'OK'}
+                    </span>
+                  )}
                 </td>
                 <td className="p-3 text-right">
                   {canEdit && (
-                    <button onClick={() => onDelete(it.id)} className="text-xs text-rose-500 hover:underline">Eliminar</button>
+                    <div className="flex items-center justify-end gap-3">
+                      {aPedido && (
+                        <button onClick={() => onPedir(it)} className="text-xs text-blue-600 hover:underline font-medium">Pedir</button>
+                      )}
+                      <button onClick={() => onDelete(it.id)} className="text-xs text-rose-500 hover:underline">Eliminar</button>
+                    </div>
                   )}
                 </td>
               </tr>
