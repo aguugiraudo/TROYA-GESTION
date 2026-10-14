@@ -318,6 +318,7 @@ export default function CatalogoProductosPage() {
     if (laserMismatch.catalogRowId) {
       const { error } = await supabase.from('catalog_times').update({ standard_time_minutes: laserMismatch.computed }).eq('id', laserMismatch.catalogRowId)
       if (error) { alert('No se pudo actualizar el tiempo en el Catálogo: ' + error.message); return }
+      await logTimeHistory(laserMismatch.catalogRowId, laserMismatch.catalogValue, laserMismatch.computed)
     } else {
       const { error } = await supabase.from('catalog_times').insert({
         sector_id: laserMismatch.catalogSectorId, target_type: 'product', product_id: selectedProduct.id,
@@ -411,10 +412,22 @@ export default function CatalogoProductosPage() {
     return { productRow, compRows }
   }
 
+  // Registra en el historial (standard_time_updates) cada cambio de un tiempo del Catálogo hecho desde esta pantalla
+  async function logTimeHistory(catalogTimeId: string, oldMinutes: number | null, newMinutes: number) {
+    if (oldMinutes == null || Math.abs(Number(oldMinutes) - newMinutes) < 0.005) return
+    const { error } = await supabase.from('standard_time_updates').insert({
+      catalog_time_id: catalogTimeId, old_minutes: Number(oldMinutes), new_minutes: newMinutes,
+    })
+    if (error) alert('El tiempo se guardó, pero no se pudo registrar en el historial: ' + error.message)
+  }
+
   async function saveProductTime(sectorId: string, existingId: string | null, minutes: number) {
     if (!selectedProduct) return
     if (existingId) {
-      await supabase.from('catalog_times').update({ standard_time_minutes: minutes }).eq('id', existingId)
+      const oldMin = productTimes.find((t) => t.id === existingId)?.standard_time_minutes ?? null
+      const { error } = await supabase.from('catalog_times').update({ standard_time_minutes: minutes }).eq('id', existingId)
+      if (error) { alert('No se pudo guardar el tiempo: ' + error.message); return }
+      await logTimeHistory(existingId, oldMin, minutes)
     } else {
       await supabase.from('catalog_times').insert({
         sector_id: sectorId, target_type: 'product', product_id: selectedProduct.id, standard_time_minutes: minutes,
@@ -424,7 +437,10 @@ export default function CatalogoProductosPage() {
   }
 
   async function saveComponentTime(rowId: string, minutes: number) {
-    await supabase.from('catalog_times').update({ standard_time_minutes: minutes }).eq('id', rowId)
+    const oldMin = componentTimes.find((t) => t.id === rowId)?.standard_time_minutes ?? null
+    const { error } = await supabase.from('catalog_times').update({ standard_time_minutes: minutes }).eq('id', rowId)
+    if (error) { alert('No se pudo guardar el tiempo: ' + error.message); return }
+    await logTimeHistory(rowId, oldMin, minutes)
     if (selectedProduct) fetchProductDetail(selectedProduct.id)
   }
 
@@ -872,7 +888,7 @@ export default function CatalogoProductosPage() {
                       {e.old_minutes} min → <strong className="text-emerald-700">{e.new_minutes} min</strong>
                     </p>
                     <p className="text-xs text-slate-400">
-                      {e.operators?.full_name} — {new Date(e.created_at).toLocaleDateString()}
+                      {e.operators?.full_name || 'Edición manual en Catálogo'} — {new Date(e.created_at).toLocaleDateString()}
                     </p>
                   </div>
                 ))}
