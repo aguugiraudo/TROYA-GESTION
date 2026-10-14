@@ -222,6 +222,13 @@ export default function CatalogoProductosPage() {
 
     // Guarda "en el lugar" (update/insert) sin borrar todo antes: así nunca se pierden datos si algo falla
     // y se conservan los ids (las tareas del plan que apuntan a un nido no se rompen).
+    // Los nidos que se quitan pueden estar vinculados a tareas del plan: se desvinculan (la tarea se conserva) antes de borrar
+    async function liberarNidos(ids: string[]) {
+      if (ids.length === 0) return null
+      const { error } = await supabase.from('operator_daily_tasks').update({ laser_nido_id: null }).in('laser_nido_id', ids)
+      return error ? error.message : null
+    }
+
     const errores: string[] = []
     const { data: espBD } = await supabase.from('laser_espesores').select('id').eq('laser_lote_id', loteId)
     const espIdsBD: string[] = (espBD || []).map((e: any) => e.id)
@@ -265,6 +272,8 @@ export default function CatalogoProductosPage() {
       }
       const nidosABorrar = nidoIdsBD.filter((id) => !nidoIdsKeep.includes(id))
       if (nidosABorrar.length > 0) {
+        const libErr = await liberarNidos(nidosABorrar)
+        if (libErr) errores.push('No se pudieron desvincular tareas de nidos eliminados: ' + libErr)
         const { error } = await supabase.from('laser_nidos').delete().in('id', nidosABorrar)
         if (error) errores.push('No se pudieron quitar nidos eliminados: ' + error.message)
       }
@@ -272,6 +281,9 @@ export default function CatalogoProductosPage() {
 
     const espABorrar = espIdsBD.filter((id) => !espIdsKeep.includes(id))
     if (espABorrar.length > 0) {
+      const { data: nidosDeEsp } = await supabase.from('laser_nidos').select('id').in('laser_espesor_id', espABorrar)
+      const libErr = await liberarNidos((nidosDeEsp || []).map((n: any) => n.id))
+      if (libErr) errores.push('No se pudieron desvincular tareas de nidos eliminados: ' + libErr)
       const { error } = await supabase.from('laser_espesores').delete().in('id', espABorrar)
       if (error) errores.push('No se pudieron quitar espesores eliminados: ' + error.message)
     }
