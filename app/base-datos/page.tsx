@@ -44,6 +44,7 @@ export default function CatalogoProductosPage() {
   const [laserModalQty, setLaserModalQty] = useState<number>(0)
   const [laserEspesores, setLaserEspesores] = useState<{ id: string | null; espesor_mm: string; material: string; nidos: { id: string | null; minutos: string; cargaDescarga: string }[] }[]>([])
   const [laserLoading, setLaserLoading] = useState(false)
+  const [laserReport, setLaserReport] = useState<{ rows: any[]; loading: boolean } | null>(null)
 
   // Aviso de descuadre entre el tiempo unitario que da el desglose y el tiempo cargado en el Catálogo
   const [laserMismatch, setLaserMismatch] = useState<{ computed: number; catalogValue: number | null; catalogRowId: string | null; catalogSectorId: string } | null>(null)
@@ -206,6 +207,13 @@ export default function CatalogoProductosPage() {
     return Math.round((totalMin / laserModalQty) * 100) / 100
   }
 
+  // Los nidos que se quitan pueden estar vinculados a tareas del plan: se desvinculan (la tarea se conserva) antes de borrar
+  async function liberarNidos(ids: string[]) {
+    if (ids.length === 0) return null
+    const { error } = await supabase.from('operator_daily_tasks').update({ laser_nido_id: null }).in('laser_nido_id', ids)
+    return error ? error.message : null
+  }
+
   async function saveLaserLote() {
     if (!selectedProduct) return
     setLaserLoading(true)
@@ -222,13 +230,6 @@ export default function CatalogoProductosPage() {
 
     // Guarda "en el lugar" (update/insert) sin borrar todo antes: así nunca se pierden datos si algo falla
     // y se conservan los ids (las tareas del plan que apuntan a un nido no se rompen).
-    // Los nidos que se quitan pueden estar vinculados a tareas del plan: se desvinculan (la tarea se conserva) antes de borrar
-    async function liberarNidos(ids: string[]) {
-      if (ids.length === 0) return null
-      const { error } = await supabase.from('operator_daily_tasks').update({ laser_nido_id: null }).in('laser_nido_id', ids)
-      return error ? error.message : null
-    }
-
     const errores: string[] = []
     const { data: espBD } = await supabase.from('laser_espesores').select('id').eq('laser_lote_id', loteId)
     const espIdsBD: string[] = (espBD || []).map((e: any) => e.id)
@@ -339,9 +340,68 @@ export default function CatalogoProductosPage() {
   async function deleteLaserLote() {
     if (!laserModalLoteId) return
     if (!confirm('¿Eliminar este lote completo, con todos sus espesores y nidos?')) return
-    await supabase.from('laser_lotes').delete().eq('id', laserModalLoteId)
+    setLaserLoading(true)
+    // Desvincula las tareas del plan que apunten a nidos de este lote (la tarea se conserva)
+    const { data: esps } = await supabase.from('laser_espesores').select('id').eq('laser_lote_id', laserModalLoteId)
+    const espIds = (esps || []).map((e: any) => e.id)
+    if (espIds.length > 0) {
+      const { data: nids } = await supabase.from('laser_nidos').select('id').in('laser_espesor_id', espIds)
+      const libErr = await liberarNidos((nids || []).map((n: any) => n.id))
+      if (libErr) { alert('No se pudieron desvincular las tareas del plan: ' + libErr); setLaserLoading(false); return }
+    }
+    const { error } = await supabase.from('laser_lotes').delete().eq('id', laserModalLoteId)
+    setLaserLoading(false)
+    if (error) { alert('No se pudo eliminar el lote: ' + error.message); return }
     setLaserModalOpen(false)
     if (selectedProduct) fetchLaserLotes(selectedProduct.id)
+  }
+
+  // ---------- Reporte: tiempo de corte vs carga/descarga ----------
+  async function openLaserReport() {
+    setLaserReport({ rows: [], loading: true })
+    const { data, error } = await supabase
+      .from('laser_lotes')
+      .select('id, lote_qty, products(code, name), laser_espesores(id, espesor_mm, material, laser_nidos(standard_time_minutes, carga_descarga_minutes))')
+    if (error) { alert('No se pudo armar el reporte: ' + error.message); setLaserReport(null); return }
+    const rows = (data || []).map((l: any) => {
+      let corte = 0, carga = 0, nidos = 0
+      const keys: Record<string, number> = {}
+      let duplicado = false
+      for (const e of l.laser_espesores || []) {
+        const k = String(e.espesor_mm) + '|' + (e.material || '')
+        keys[k] = (keys[k] || 0) + 1
+        if (keys[k] > 1) duplicado = true
+        for (const n of e.laser_nidos || []) {
+          corte += Number(n.standard_time_minutes) || 0
+          carga += Number(n.carga_descarga_minutes) || 0
+          nidos++
+        }
+      }
+      const total = corte + carga
+      const qty = Number(l.lote_qty) || 1
+      return {
+        codigo: l.products?.code || '', producto: l.products?.name || '(sin producto)', lote: qty, nidos,
+        corte, carga, total, pct: total > 0 ? (carga / total) * 100 : 0,
+        corteUnit: corte / qty, cargaUnit: carga / qty, duplicado,
+      }
+    }).sort((a: any, b: any) => b.pct - a.pct)
+    setLaserReport({ rows, loading: false })
+  }
+
+  async function exportLaserReport() {
+    if (!laserReport) return
+    const XLSX = await import('xlsx')
+    const header = ['C\u00F3digo', 'Producto', 'Lote (u.)', 'Nidos', 'Corte (min)', 'Carga/descarga (min)', 'Total (min)', '% carga/descarga', 'Corte por unidad (min)', 'Carga/descarga por unidad (min)', 'Aviso']
+    const r2 = (n: number) => Math.round(n * 100) / 100
+    const body = laserReport.rows.map((r: any) => [r.codigo, r.producto, r.lote, r.nidos, r2(r.corte), r2(r.carga), r2(r.total), r2(r.pct), r2(r.corteUnit), r2(r.cargaUnit), r.duplicado ? 'Posible espesor duplicado' : ''])
+    const t = laserReport.rows.reduce((a: any, r: any) => ({ corte: a.corte + r.corte, carga: a.carga + r.carga }), { corte: 0, carga: 0 })
+    const tot = t.corte + t.carga
+    body.push([], ['', 'TOTAL GENERAL', '', '', r2(t.corte), r2(t.carga), r2(tot), tot > 0 ? r2((t.carga / tot) * 100) : 0, '', '', ''])
+    const ws = XLSX.utils.aoa_to_sheet([header, ...body])
+    ws['!cols'] = [{ wch: 10 }, { wch: 38 }, { wch: 10 }, { wch: 8 }, { wch: 14 }, { wch: 22 }, { wch: 12 }, { wch: 18 }, { wch: 22 }, { wch: 30 }, { wch: 26 }]
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Corte vs carga-descarga')
+    XLSX.writeFile(wb, 'laser_corte_vs_carga_descarga.xlsx')
   }
 
   const filteredProducts = search.length > 0
@@ -514,6 +574,9 @@ export default function CatalogoProductosPage() {
               onChange={(e) => setSearch(e.target.value)}
               className="border border-slate-300 rounded-md px-3 py-2 text-sm w-80"
             />
+            <button onClick={openLaserReport} className="text-xs border border-slate-300 text-slate-700 px-3 py-1.5 rounded-md hover:bg-slate-50 ml-auto mr-2">
+              Reporte Láser: corte vs carga/descarga
+            </button>
             {canEdit && (
               <button onClick={() => setShowNewProduct(true)} className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-md hover:bg-blue-700">
                 + Nuevo producto
@@ -867,6 +930,84 @@ export default function CatalogoProductosPage() {
                 Eliminar definitivamente
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {laserReport && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setLaserReport(null)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-5xl max-h-[90vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-start mb-1">
+              <h3 className="font-semibold text-slate-800">Láser: tiempo de corte vs carga/descarga</h3>
+              <button onClick={() => setLaserReport(null)} className="text-slate-400 hover:text-slate-600 text-lg leading-none">✕</button>
+            </div>
+            <p className="text-xs text-slate-500 mb-4">Calculado con los desgloses de lote cargados en el Catálogo (cada lote cuenta una vez). Ordenado de mayor a menor % de carga/descarga.</p>
+            {laserReport.loading ? (
+              <p className="text-sm text-slate-400">Calculando...</p>
+            ) : laserReport.rows.length === 0 ? (
+              <p className="text-sm text-slate-400">Todavía no hay lotes con desglose cargado.</p>
+            ) : (() => {
+              const t = laserReport.rows.reduce((a: any, r: any) => ({ corte: a.corte + r.corte, carga: a.carga + r.carga }), { corte: 0, carga: 0 })
+              const tot = t.corte + t.carga
+              const pct = tot > 0 ? (t.carga / tot) * 100 : 0
+              const hs = (m: number) => (m / 60).toLocaleString('es-AR', { maximumFractionDigits: 1 })
+              const f = (n: number) => n.toLocaleString('es-AR', { maximumFractionDigits: 1 })
+              const hayDup = laserReport.rows.some((r: any) => r.duplicado)
+              return (
+                <>
+                  <div className="grid grid-cols-3 gap-3 mb-4">
+                    <div className="border border-slate-200 rounded-lg p-3"><p className="text-xs text-slate-500">Corte</p><p className="text-lg font-semibold text-slate-800">{hs(t.corte)} hs</p></div>
+                    <div className="border border-slate-200 rounded-lg p-3"><p className="text-xs text-slate-500">Carga/descarga</p><p className="text-lg font-semibold text-slate-800">{hs(t.carga)} hs</p></div>
+                    <div className="border border-amber-200 bg-amber-50 rounded-lg p-3"><p className="text-xs text-amber-700">% del tiempo que es carga/descarga</p><p className="text-lg font-semibold text-amber-800">{f(pct)}%</p></div>
+                  </div>
+                  {hayDup && (
+                    <div className="mb-3 bg-amber-50 border border-amber-200 text-amber-700 text-xs rounded-md px-3 py-2">
+                      ⚠ Hay lotes con espesores repetidos (marcados abajo). Abrilos y eliminá la fila repetida: mientras tanto el reporte los cuenta de más.
+                    </div>
+                  )}
+                  <div className="overflow-x-auto rounded-xl border border-slate-200">
+                    <table className="w-full text-sm border-collapse">
+                      <thead>
+                        <tr className="bg-slate-900 text-white text-left text-xs">
+                          <th className="p-2 font-medium">Producto</th>
+                          <th className="p-2 font-medium text-right">Lote</th>
+                          <th className="p-2 font-medium text-right">Nidos</th>
+                          <th className="p-2 font-medium text-right">Corte (min)</th>
+                          <th className="p-2 font-medium text-right">Carga/desc. (min)</th>
+                          <th className="p-2 font-medium text-right">% carga/desc.</th>
+                          <th className="p-2 font-medium text-right">Corte x u.</th>
+                          <th className="p-2 font-medium text-right">Carga x u.</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {laserReport.rows.map((r: any, i: number) => (
+                          <tr key={i} className="border-t border-slate-100">
+                            <td className="p-2 text-slate-700">{r.producto}{r.duplicado ? ' ⚠' : ''}</td>
+                            <td className="p-2 text-right">{r.lote} u.</td>
+                            <td className="p-2 text-right">{r.nidos}</td>
+                            <td className="p-2 text-right">{f(r.corte)}</td>
+                            <td className="p-2 text-right">{f(r.carga)}</td>
+                            <td className="p-2 text-right font-semibold text-amber-700">{f(r.pct)}%</td>
+                            <td className="p-2 text-right">{f(r.corteUnit)}</td>
+                            <td className="p-2 text-right">{f(r.cargaUnit)}</td>
+                          </tr>
+                        ))}
+                        <tr className="border-t-2 border-slate-300 bg-slate-50 font-semibold">
+                          <td className="p-2">TOTAL GENERAL</td><td className="p-2" /><td className="p-2" />
+                          <td className="p-2 text-right">{f(t.corte)}</td>
+                          <td className="p-2 text-right">{f(t.carga)}</td>
+                          <td className="p-2 text-right text-amber-700">{f(pct)}%</td>
+                          <td className="p-2" /><td className="p-2" />
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="mt-4 flex justify-end">
+                    <button onClick={exportLaserReport} className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-md hover:bg-blue-700">Exportar a Excel</button>
+                  </div>
+                </>
+              )
+            })()}
           </div>
         </div>
       )}
