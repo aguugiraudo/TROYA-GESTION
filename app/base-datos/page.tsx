@@ -220,25 +220,68 @@ export default function CatalogoProductosPage() {
       loteId = data.id
     }
 
-    await supabase.from('laser_espesores').delete().eq('laser_lote_id', loteId)
+    // Guarda "en el lugar" (update/insert) sin borrar todo antes: así nunca se pierden datos si algo falla
+    // y se conservan los ids (las tareas del plan que apuntan a un nido no se rompen).
+    const errores: string[] = []
+    const { data: espBD } = await supabase.from('laser_espesores').select('id').eq('laser_lote_id', loteId)
+    const espIdsBD: string[] = (espBD || []).map((e: any) => e.id)
+    const espIdsKeep: string[] = []
 
     for (const esp of laserEspesores) {
       if (!esp.espesor_mm) continue
-      const { data: espData, error: espErr } = await supabase.from('laser_espesores')
-        .insert({ laser_lote_id: loteId, espesor_mm: parseFloat(esp.espesor_mm), material: esp.material.trim() || null })
-        .select().single()
-      if (espErr) continue
-
-      const nidosToInsert = esp.nidos
-        .filter((n) => n.minutos)
-        .map((n, i) => ({
-          laser_espesor_id: espData.id, numero: i + 1,
-          standard_time_minutes: parseFloat(n.minutos),
-          carga_descarga_minutes: parseFloat(n.cargaDescarga || '0'),
-        }))
-      if (nidosToInsert.length > 0) {
-        await supabase.from('laser_nidos').insert(nidosToInsert)
+      const espPayload = { laser_lote_id: loteId, espesor_mm: parseFloat(esp.espesor_mm), material: esp.material.trim() || null }
+      let espId: string | null = esp.id
+      if (espId) {
+        const { error } = await supabase.from('laser_espesores').update(espPayload).eq('id', espId)
+        if (error) { errores.push('Espesor ' + esp.espesor_mm + ' mm: ' + error.message); continue }
+      } else {
+        const { data: espData, error } = await supabase.from('laser_espesores').insert(espPayload).select().single()
+        if (error || !espData) { errores.push('Espesor ' + esp.espesor_mm + ' mm: ' + (error?.message || 'no se pudo crear')); continue }
+        espId = espData.id
       }
+      espIdsKeep.push(espId as string)
+
+      const { data: nidosBD } = await supabase.from('laser_nidos').select('id').eq('laser_espesor_id', espId)
+      const nidoIdsBD: string[] = (nidosBD || []).map((n: any) => n.id)
+      const nidoIdsKeep: string[] = []
+      let numero = 0
+      for (const n of esp.nidos) {
+        if (!n.minutos) continue
+        numero++
+        const nPayload = {
+          laser_espesor_id: espId, numero,
+          standard_time_minutes: parseFloat(n.minutos),
+          carga_descarga_minutes: parseFloat(n.cargaDescarga || '0') || 0,
+        }
+        if (n.id) {
+          const { error } = await supabase.from('laser_nidos').update(nPayload).eq('id', n.id)
+          if (error) errores.push('Nido ' + numero + ' (' + esp.espesor_mm + ' mm): ' + error.message)
+          else nidoIdsKeep.push(n.id)
+        } else {
+          const { data: nd, error } = await supabase.from('laser_nidos').insert(nPayload).select().single()
+          if (error || !nd) errores.push('Nido ' + numero + ' (' + esp.espesor_mm + ' mm): ' + (error?.message || 'no se pudo crear'))
+          else nidoIdsKeep.push(nd.id)
+        }
+      }
+      const nidosABorrar = nidoIdsBD.filter((id) => !nidoIdsKeep.includes(id))
+      if (nidosABorrar.length > 0) {
+        const { error } = await supabase.from('laser_nidos').delete().in('id', nidosABorrar)
+        if (error) errores.push('No se pudieron quitar nidos eliminados: ' + error.message)
+      }
+    }
+
+    const espABorrar = espIdsBD.filter((id) => !espIdsKeep.includes(id))
+    if (espABorrar.length > 0) {
+      const { error } = await supabase.from('laser_espesores').delete().in('id', espABorrar)
+      if (error) errores.push('No se pudieron quitar espesores eliminados: ' + error.message)
+    }
+
+    if (errores.length > 0) {
+      alert('Hubo errores al guardar el desglose (lo que sí se pudo guardar quedó guardado):\n\n' + errores.join('\n'))
+      setLaserLoading(false)
+      openExistingLaserLote({ id: loteId, lote_qty: laserModalQty })
+      fetchLaserLotes(selectedProduct.id)
+      return
     }
 
     setLaserLoading(false)
@@ -261,12 +304,14 @@ export default function CatalogoProductosPage() {
   async function resolveLaserMismatchUpdateCatalog() {
     if (!laserMismatch || !selectedProduct) return
     if (laserMismatch.catalogRowId) {
-      await supabase.from('catalog_times').update({ standard_time_minutes: laserMismatch.computed }).eq('id', laserMismatch.catalogRowId)
+      const { error } = await supabase.from('catalog_times').update({ standard_time_minutes: laserMismatch.computed }).eq('id', laserMismatch.catalogRowId)
+      if (error) { alert('No se pudo actualizar el tiempo en el Catálogo: ' + error.message); return }
     } else {
-      await supabase.from('catalog_times').insert({
+      const { error } = await supabase.from('catalog_times').insert({
         sector_id: laserMismatch.catalogSectorId, target_type: 'product', product_id: selectedProduct.id,
         standard_time_minutes: laserMismatch.computed,
       })
+      if (error) { alert('No se pudo crear el tiempo en el Catálogo: ' + error.message); return }
     }
     setLaserMismatch(null)
     setLaserModalOpen(false)
