@@ -13,6 +13,7 @@ type Item = { id: string; label: string }
 
 // Sectores que trabajan sobre el producto armado (brasero, plancheta...) y no pieza por pieza
 const ENSAMBLE = /soldad|granall|pintur|embal/i
+const EMBALAJE = /embal/i
 
 function normalizar(t: string) {
   return t.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
@@ -157,16 +158,16 @@ function DesignCell({ url, obs, canEdit, onSave }: {
   )
 }
 
-function Chips({ sectors, activos, canEdit, onToggle }: {
-  sectors: any[]; activos: string[]; canEdit: boolean; onToggle: (id: string) => void
+function Chips({ sectors, activos, canEdit, onToggle, nowrap }: {
+  sectors: any[]; activos: string[]; canEdit: boolean; onToggle: (id: string) => void; nowrap?: boolean
 }) {
   return (
-    <div className="flex flex-wrap gap-1">
+    <div className={`flex gap-1 ${nowrap ? 'flex-nowrap' : 'flex-wrap'}`}>
       {sectors.map((s) => {
         const on = activos.includes(s.id)
         return (
           <button key={s.id} disabled={!canEdit} onClick={() => onToggle(s.id)} title={s.name}
-            className={`text-[11px] px-2 py-0.5 rounded-full border ${on ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-400'} ${canEdit ? 'hover:border-slate-500' : ''}`}>
+            className={`text-[11px] px-2 py-0.5 rounded-full border whitespace-nowrap ${on ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-400'} ${canEdit ? 'hover:border-slate-500' : ''}`}>
             {s.name}
           </button>
         )
@@ -188,6 +189,7 @@ export default function DespiecePage() {
   const [lineas, setLineas] = useState<any[]>([])
   const [lineaSectores, setLineaSectores] = useState<Record<string, string[]>>({})
   const [grupoSectores, setGrupoSectores] = useState<Record<string, string[]>>({})
+  const [productoSectores, setProductoSectores] = useState<string[]>([])
   const [composicion, setComposicion] = useState<any[]>([])
   const [loadingProd, setLoadingProd] = useState(false)
 
@@ -223,6 +225,8 @@ export default function DespiecePage() {
     const gmap: Record<string, string[]> = {}
     ;(gs || []).forEach((r: any) => { (gmap[r.grupo] = gmap[r.grupo] || []).push(r.sector_id) })
     setGrupoSectores(gmap)
+    const { data: ps } = await supabase.from('despiece_producto_sectores').select('sector_id').eq('product_id', pid)
+    setProductoSectores((ps || []).map((r: any) => r.sector_id))
     const { data: comp } = await supabase.from('producto_materiales').select('*').eq('product_id', pid)
     setComposicion(comp || [])
     setLoadingProd(false)
@@ -231,7 +235,7 @@ export default function DespiecePage() {
   function elegirProducto(id: string) {
     setProductId(id)
     if (id) cargarProducto(id)
-    else { setLineas([]); setLineaSectores({}); setGrupoSectores({}); setComposicion([]) }
+    else { setLineas([]); setLineaSectores({}); setGrupoSectores({}); setProductoSectores([]); setComposicion([]) }
   }
 
   const productItems: Item[] = useMemo(() => products.map((p) => ({ id: p.id, label: `${p.code} · ${p.name}` })), [products])
@@ -241,7 +245,8 @@ export default function DespiecePage() {
   const secById = useMemo(() => { const m: Record<string, any> = {}; sectors.forEach((x) => { m[x.id] = x }); return m }, [sectors])
   const laserSector = sectors.find((s) => /l[aá]ser/i.test(s.name))
   const sectoresPieza = sectors.filter((s) => !ENSAMBLE.test(s.name))
-  const sectoresEnsamble = sectors.filter((s) => ENSAMBLE.test(s.name))
+  const sectoresEnsamble = sectors.filter((s) => ENSAMBLE.test(s.name) && !EMBALAJE.test(s.name))
+  const sectoresProducto = sectors.filter((s) => EMBALAJE.test(s.name))
 
   function esLaser(l: any) { return l.tipo === 'pieza' && !!laserSector && (lineaSectores[l.id] || []).includes(laserSector.id) }
   function totalLinea(l: any) { return Number(l.medida) * Number(l.cantidad) }
@@ -281,6 +286,18 @@ export default function DespiecePage() {
       const { error } = await supabase.from('despiece_grupo_sectores').insert({ product_id: productId, grupo, sector_id: sectorId })
       if (error) { alert('No se pudo guardar: ' + error.message); return }
       setGrupoSectores((prev) => ({ ...prev, [grupo]: [...actuales, sectorId] }))
+    }
+  }
+
+  async function toggleProductoSector(sectorId: string) {
+    if (productoSectores.includes(sectorId)) {
+      const { error } = await supabase.from('despiece_producto_sectores').delete().eq('product_id', productId).eq('sector_id', sectorId)
+      if (error) { alert('No se pudo guardar: ' + error.message); return }
+      setProductoSectores((prev) => prev.filter((x) => x !== sectorId))
+    } else {
+      const { error } = await supabase.from('despiece_producto_sectores').insert({ product_id: productId, sector_id: sectorId })
+      if (error) { alert('No se pudo guardar: ' + error.message); return }
+      setProductoSectores((prev) => [...prev, sectorId])
     }
   }
 
@@ -422,7 +439,7 @@ export default function DespiecePage() {
   return (
     <main className="p-6 max-w-6xl mx-auto">
       <h1 className="text-2xl font-semibold text-slate-800 mb-1">Despiece de productos</h1>
-      <p className="text-sm text-slate-500 mb-4">Piezas de cada producto y los sectores por los que pasan.</p>
+      <p className="text-sm text-slate-500 mb-4">Piezas de cada producto y los sectores por los que pasan. Hacé click sobre cualquier valor (nombre, material, medida, cantidad) para editarlo.</p>
 
       {!canEdit && (
         <div className="mb-4 bg-amber-50 border border-amber-200 text-amber-700 text-xs rounded-md px-3 py-2">Modo solo lectura — no tenés permisos para editar este módulo.</div>
@@ -448,6 +465,12 @@ export default function DespiecePage() {
             </label>
           </div>
 
+          <div className="flex flex-wrap items-center gap-3 mb-6 pb-3 border-b border-slate-200">
+            <span className="text-sm font-semibold text-slate-800">{producto ? `${producto.code} · ${producto.name}` : ''}</span>
+            <span className="text-xs text-slate-400">producto terminado, una sola línea en la orden de</span>
+            <Chips sectors={sectoresProducto} activos={productoSectores} canEdit={canEdit} onToggle={toggleProductoSector} nowrap />
+          </div>
+
           {lineas.length === 0 && <p className="text-sm text-slate-400 mb-4">Este producto todavía no tiene despiece cargado.{canEdit ? ' Creá el primer grupo abajo.' : ''}</p>}
 
           {grupos.map((g) => {
@@ -460,7 +483,7 @@ export default function DespiecePage() {
                     <EditCell value={g.nombre} canEdit={canEdit} onSave={(v) => renombrarGrupo(g.nombre, v)} />
                   </h3>
                   <div className="flex items-center gap-2">
-                    <span className="text-xs text-slate-400">armado en</span>
+                    <span className="text-xs text-slate-400">grupo armado pasa por</span>
                     <Chips sectors={sectoresEnsamble} activos={grupoSectores[g.nombre] || []} canEdit={canEdit} onToggle={(id) => toggleGrupoSector(g.nombre, id)} />
                   </div>
                   {canEdit && <button onClick={() => agregarLinea(g.nombre, 'pieza')} className="text-xs text-blue-600 hover:underline ml-auto">+ pieza</button>}
@@ -472,7 +495,7 @@ export default function DespiecePage() {
                       <th className="py-2 pr-3 font-normal">Materia prima</th>
                       <th className="py-2 pr-3 font-normal text-right">m²</th>
                       <th className="py-2 pr-3 font-normal text-right">Cant.</th>
-                      <th className="py-2 pr-3 font-normal">Se corta / forma en</th>
+                      <th className="py-2 pr-3 font-normal">Pasa por</th>
                       <th className="py-2 pr-3 font-normal">Diseño</th>
                       {canEdit && <th className="py-2 font-normal"></th>}
                     </tr>
@@ -497,7 +520,7 @@ export default function DespiecePage() {
                           <EditCell value={String(l.cantidad)} type="number" align="right" canEdit={canEdit} display={num(l.cantidad)} onSave={(v) => saveNum(l, 'cantidad', v)} />
                         </td>
                         <td className="py-2 pr-3">
-                          <Chips sectors={sectoresPieza} activos={lineaSectores[l.id] || []} canEdit={canEdit} onToggle={(id) => toggleSector(l, id)} />
+                          <Chips nowrap sectors={sectoresPieza} activos={lineaSectores[l.id] || []} canEdit={canEdit} onToggle={(id) => toggleSector(l, id)} />
                         </td>
                         <td className="py-2 pr-3 min-w-[110px]">
                           {esLaser(l) ? (
@@ -507,7 +530,6 @@ export default function DespiecePage() {
                         </td>
                         {canEdit && (
                           <td className="py-2 whitespace-nowrap text-xs">
-                            <button onClick={() => duplicar(l)} className="text-slate-400 hover:text-blue-600 mr-2">duplicar</button>
                             <button onClick={() => eliminar(l)} className="text-slate-400 hover:text-red-600">eliminar</button>
                           </td>
                         )}
