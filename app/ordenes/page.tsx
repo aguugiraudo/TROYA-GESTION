@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { useAuth } from '../components/AuthGate'
 
@@ -62,18 +62,38 @@ function Picker({ items, value, onPick, placeholder }: {
   )
 }
 
-// ---------- Columnas opcionales de la hoja ----------
-const COLUMNAS: { key: string; label: string; def: boolean }[] = [
-  { key: 'grupo', label: 'Grupo', def: true },
-  { key: 'material', label: 'Material', def: true },
-  { key: 'medida', label: 'Medida', def: true },
-  { key: 'ancho_largo', label: 'Ancho × Largo', def: true },
-  { key: 'diseno', label: 'Link de diseño', def: true },
-  { key: 'componentes', label: 'Componentes del grupo', def: false },
-  { key: 'fecha', label: 'Fecha', def: true },
-  { key: 'hecho', label: 'Cant. hecha', def: true },
-  { key: 'firma', label: 'Operario / firma', def: true },
+// ---------- Columnas opcionales de la hoja (cada sector tiene las suyas, como en tu planilla) ----------
+const COLUMNAS: { key: string; label: string }[] = [
+  { key: 'proceso', label: 'Proceso' },
+  { key: 'material', label: 'Materia prima' },
+  { key: 'grupo', label: 'Componente' },
+  { key: 'medida', label: 'Medida' },
+  { key: 'ancho_largo', label: 'Ancho × Largo' },
+  { key: 'diseno', label: 'Link de diseño' },
+  { key: 'componentes', label: 'Piezas del grupo' },
+  { key: 'obs', label: 'Observaciones' },
 ]
+const APLICA: Record<string, string[]> = {
+  pieza: ['proceso', 'material', 'grupo', 'medida', 'ancho_largo', 'diseno', 'obs'],
+  grupo: ['componentes', 'obs'],
+  producto: ['obs'],
+}
+const MECANIZADO_RE = /mecaniz/i
+const LASER_RE = /l[aá]ser/i
+const PLEGADO_RE = /plegad/i
+const PROC_MECANIZADO_RE = /sensitiv|balanc|rebab|dobl|rolad|perfor/i
+
+// Qué se muestra por defecto en la hoja de cada sector (según tu planilla)
+function columnasPorDefecto(sector: string, tipo: string): Record<string, boolean> {
+  const on: Record<string, boolean> = { obs: true }
+  if (tipo === 'pieza') {
+    if (LASER_RE.test(sector)) { on.material = true }
+    else if (MECANIZADO_RE.test(sector)) { on.proceso = true; on.material = true; on.medida = true }
+    else if (PLEGADO_RE.test(sector)) { on.grupo = true }
+    else { on.material = true; on.grupo = true; on.medida = true }
+  }
+  return on
+}
 
 type Row = { key: string; cells: Record<string, any>; nombre: string; cantidad: number }
 type Sheet = { sectorId: string; sector: string; tipo: 'pieza' | 'grupo' | 'producto'; rows: Row[] }
@@ -93,7 +113,6 @@ export default function OrdenesPage() {
   const [nuevo, setNuevo] = useState(false)
   const [nProducto, setNProducto] = useState('')
   const [nCantidad, setNCantidad] = useState('1')
-  const [nObjetivo, setNObjetivo] = useState('')
   const [nNotas, setNNotas] = useState('')
   const [guardando, setGuardando] = useState(false)
 
@@ -101,7 +120,8 @@ export default function OrdenesPage() {
   const [imprimiendo, setImprimiendo] = useState<any | null>(null)
   const [hojas, setHojas] = useState<Sheet[]>([])
   const [hojasOn, setHojasOn] = useState<Record<string, boolean>>({})
-  const [cols, setCols] = useState<Record<string, boolean>>(() => { const o: Record<string, boolean> = {}; COLUMNAS.forEach((c) => { o[c.key] = c.def }); return o })
+  const [registros, setRegistros] = useState<Record<string, number>>({})
+  const [colsPorHoja, setColsPorHoja] = useState<Record<string, Record<string, boolean>>>({})
   const [cargandoHojas, setCargandoHojas] = useState(false)
 
   useEffect(() => { cargar() }, [])
@@ -129,11 +149,11 @@ export default function OrdenesPage() {
     if (isNaN(cant) || cant <= 0) { alert('La cantidad tiene que ser mayor a 0.'); return }
     setGuardando(true)
     const { error } = await supabase.from('op_ordenes').insert({
-      product_id: nProducto, cantidad: cant, fecha_objetivo: nObjetivo || null, notas: nNotas.trim() || null,
+      product_id: nProducto, cantidad: cant, notas: nNotas.trim() || null,
     })
     setGuardando(false)
     if (error) { alert('No se pudo crear la orden: ' + error.message); return }
-    setNuevo(false); setNProducto(''); setNCantidad('1'); setNObjetivo(''); setNNotas('')
+    setNuevo(false); setNProducto(''); setNCantidad('1'); setNNotas('')
     cargar()
   }
 
@@ -205,13 +225,14 @@ export default function OrdenesPage() {
         if (delSector.length === 0) return
         out.push({
           sectorId: s.id, sector: s.name, tipo: 'pieza',
-          rows: delSector.map((l: any) => {
+          rows: delSector.slice().sort((a: any, b: any) => String((matById[a.material_id] || {}).nombre || '').localeCompare(String((matById[b.material_id] || {}).nombre || ''))).map((l: any) => {
             const m = l.material_id ? matById[l.material_id] : null
             return {
               key: l.id, nombre: l.nombre, cantidad: Number(l.cantidad) * cant,
               cells: {
                 grupo: l.grupo || '',
-                material: m ? `${m.codigo || ''} ${m.nombre}`.trim() : (l.material_texto || ''),
+                proceso: String(l.procesos_detalle || '').split(',').map((x: string) => x.trim()).filter((x: string) => PROC_MECANIZADO_RE.test(x)).map((x: string) => x.charAt(0).toUpperCase() + x.slice(1)).join(' + '),
+                material: m ? m.nombre : (l.material_texto || ''),
                 medida: `${num(l.medida, 6)}${m && m.unidad_medida ? ' ' + m.unidad_medida : ''}`,
                 ancho_largo: l.ancho_mm != null || l.largo_mm != null ? `${l.ancho_mm != null ? num(l.ancho_mm, 1) : '?'} × ${l.largo_mm != null ? num(l.largo_mm, 1) : '?'} mm` : '',
                 diseno: l.diseno_url || '',
@@ -226,21 +247,24 @@ export default function OrdenesPage() {
 
     setHojas(out)
     const on: Record<string, boolean> = {}
-    out.forEach((h) => { on[h.sectorId] = true })
+    const cp: Record<string, Record<string, boolean>> = {}
+    out.forEach((h) => { on[h.sectorId] = true; cp[h.sectorId] = columnasPorDefecto(h.sector, h.tipo) })
+    const rg: Record<string, number> = {}
+    out.forEach((h) => { rg[h.sectorId] = 3 })
+    setRegistros(rg)
     setHojasOn(on)
+    setColsPorHoja(cp)
     setCargandoHojas(false)
   }
 
   function columnasDe(h: Sheet) {
-    // Qué columnas opcionales aplican a cada tipo de hoja
-    const aplica: Record<string, string[]> = {
-      pieza: ['grupo', 'material', 'medida', 'ancho_largo', 'diseno', 'fecha', 'hecho', 'firma'],
-      grupo: ['componentes', 'fecha', 'hecho', 'firma'],
-      producto: ['fecha', 'hecho', 'firma'],
-    }
-    return COLUMNAS.filter((c) => aplica[h.tipo].includes(c.key) && cols[c.key])
+    const act = colsPorHoja[h.sectorId] || {}
+    return COLUMNAS.filter((c) => APLICA[h.tipo].includes(c.key) && act[c.key] && !(c.key === 'proceso' && !MECANIZADO_RE.test(h.sector)))
   }
-  function tituloNombre(h: Sheet) { return h.tipo === 'pieza' ? 'Pieza' : h.tipo === 'grupo' ? 'Producto armado' : 'Producto' }
+  function posibles(h: Sheet) {
+    return COLUMNAS.filter((c) => APLICA[h.tipo].includes(c.key) && !(c.key === 'proceso' && !MECANIZADO_RE.test(h.sector)))
+  }
+  function tituloNombre(h: Sheet) { return h.tipo === 'pieza' ? 'Pieza / observación' : h.tipo === 'grupo' ? 'Producto armado' : 'Producto' }
 
   const visibles = ordenes.filter((o) => filtroEstado === 'todas' || o.estado === filtroEstado)
 
@@ -249,13 +273,18 @@ export default function OrdenesPage() {
   return (
     <>
       <style>{`
-        @page { size: A4 landscape; margin: 10mm; }
+        @page { size: A4 landscape; margin: 8mm; }
         @media print {
+          nav { display: none !important; }
           body * { visibility: hidden !important; }
+          .preview-root { position: absolute !important; inset: auto !important; left: 0; top: 0; width: 100%; height: auto !important; overflow: visible !important; background: #fff !important; }
           .print-area, .print-area * { visibility: visible !important; }
-          .print-area { position: absolute; left: 0; top: 0; width: 100%; }
-          .sheet { page-break-after: always; break-after: page; }
-          .sheet:last-child { page-break-after: auto; break-after: auto; }
+          .print-area { width: 100%; }
+          .hoja { page-break-after: always; break-after: page; }
+          .hoja:last-child { page-break-after: auto; break-after: auto; }
+          .sheet { margin: 0 !important; padding: 0 !important; border: 0 !important; box-shadow: none !important; }
+          thead { display: table-header-group; }
+          tr { page-break-inside: avoid; break-inside: avoid; }
           .no-print { display: none !important; }
         }
       `}</style>
@@ -271,7 +300,7 @@ export default function OrdenesPage() {
 
         {nuevo && (
           <div className="mb-6 border border-slate-200 rounded-lg p-4 bg-white">
-            <div className="grid gap-3 md:grid-cols-[1fr_110px_160px]">
+            <div className="grid gap-3 md:grid-cols-[1fr_110px]">
               <div>
                 <label className="text-xs text-slate-500">Producto</label>
                 <Picker items={productItems} value={nProducto} onPick={setNProducto} placeholder="Escribí para buscar un producto..." />
@@ -279,10 +308,6 @@ export default function OrdenesPage() {
               <div>
                 <label className="text-xs text-slate-500">Cantidad</label>
                 <input type="number" min="1" step="any" value={nCantidad} onChange={(e) => setNCantidad(e.target.value)} className="w-full border border-slate-300 rounded-md px-2 py-1.5 text-sm" />
-              </div>
-              <div>
-                <label className="text-xs text-slate-500">Para el día (opcional)</label>
-                <input type="date" value={nObjetivo} onChange={(e) => setNObjetivo(e.target.value)} className="w-full border border-slate-300 rounded-md px-2 py-1.5 text-sm" />
               </div>
             </div>
             <div className="mt-3">
@@ -307,7 +332,6 @@ export default function OrdenesPage() {
                 <th className="py-2 pr-3 font-normal">Emitida</th>
                 <th className="py-2 pr-3 font-normal">Producto</th>
                 <th className="py-2 pr-3 font-normal text-right">Cant.</th>
-                <th className="py-2 pr-3 font-normal">Para el día</th>
                 <th className="py-2 pr-3 font-normal">Observaciones</th>
                 <th className="py-2 pr-3 font-normal">Estado</th>
                 <th className="py-2 font-normal"></th>
@@ -326,10 +350,6 @@ export default function OrdenesPage() {
                         <input defaultValue={String(o.cantidad)} type="number" step="any" className="w-16 text-right border border-transparent hover:border-slate-300 rounded px-1"
                           onBlur={(e) => { const n = parseFloat(e.target.value.replace(',', '.')); if (isNaN(n) || n <= 0) { alert('La cantidad tiene que ser mayor a 0.'); e.target.value = String(o.cantidad); return } if (n !== Number(o.cantidad)) editarCampo(o, 'cantidad', n) }} />
                       ) : num(o.cantidad)}
-                    </td>
-                    <td className="py-2 pr-3 whitespace-nowrap">
-                      {canEdit ? <input type="date" defaultValue={o.fecha_objetivo || ''} className="border border-transparent hover:border-slate-300 rounded px-1 text-sm"
-                        onBlur={(e) => { if ((e.target.value || null) !== (o.fecha_objetivo || null)) editarCampo(o, 'fecha_objetivo', e.target.value || null) }} /> : fechaAR(o.fecha_objetivo)}
                     </td>
                     <td className="py-2 pr-3 min-w-[160px]">
                       {canEdit ? <input defaultValue={o.notas || ''} placeholder="—" className="w-full border border-transparent hover:border-slate-300 rounded px-1"
@@ -354,7 +374,7 @@ export default function OrdenesPage() {
       </main>
 
       {imprimiendo && (
-        <div className="fixed inset-0 z-50 bg-slate-100 overflow-y-auto">
+        <div className="preview-root fixed inset-0 z-50 bg-slate-100 overflow-y-auto">
           <div className="no-print sticky top-0 bg-white border-b border-slate-200 px-6 py-3 z-10">
             <div className="flex flex-wrap items-center gap-3">
               <span className="font-semibold text-slate-800">{nroOP(imprimiendo.numero)} · vista de impresión</span>
@@ -369,14 +389,6 @@ export default function OrdenesPage() {
                 </label>
               ))}
             </div>
-            <div className="mt-1 text-xs text-slate-500 flex flex-wrap gap-x-4 gap-y-1">
-              <span className="font-medium text-slate-700">Columnas:</span>
-              {COLUMNAS.map((c) => (
-                <label key={c.key} className="flex items-center gap-1 cursor-pointer">
-                  <input type="checkbox" checked={!!cols[c.key]} onChange={(e) => setCols((p) => ({ ...p, [c.key]: e.target.checked }))} />{c.label}
-                </label>
-              ))}
-            </div>
           </div>
 
           {cargandoHojas && <p className="p-6 text-sm text-slate-500 no-print">Armando las hojas...</p>}
@@ -387,49 +399,90 @@ export default function OrdenesPage() {
           <div className="print-area">
             {hojas.filter((h) => hojasOn[h.sectorId]).map((h) => {
               const columnas = columnasDe(h)
+              const antes = columnas.filter((c) => c.key === 'proceso' || c.key === 'material')
+              const despues = columnas.filter((c) => c.key !== 'proceso' && c.key !== 'material')
               const p = prodById[imprimiendo.product_id]
+              const nReg = registros[h.sectorId] || 3
+              // Altura de cada fila: reparte el largo de la hoja (A4 horizontal ~ 145 mm útiles para filas)
+              const altoFila = Math.max(9, Math.min(40, Math.floor(145 / Math.max(1, h.rows.length))))
               return (
-                <section key={h.sectorId} className="sheet bg-white m-4 p-6 shadow-sm border border-slate-200 print:m-0 print:shadow-none print:border-0">
-                  <div className="flex items-start justify-between border-b-2 border-slate-800 pb-2 mb-3">
-                    <div>
-                      <div className="text-2xl font-bold text-slate-900">{h.sector.toUpperCase()}</div>
-                      <div className="text-sm text-slate-700">{p ? `${p.code} · ${p.name}` : ''}</div>
-                    </div>
-                    <div className="text-right text-sm text-slate-700">
-                      <div className="text-lg font-bold">{nroOP(imprimiendo.numero)}</div>
-                      <div>Cantidad a producir: <b>{num(imprimiendo.cantidad)}</b></div>
-                      <div>Emitida: {fechaAR(imprimiendo.fecha_emision)}{imprimiendo.fecha_objetivo ? ` · Para el: ${fechaAR(imprimiendo.fecha_objetivo)}` : ''}</div>
-                    </div>
+                <div key={h.sectorId} className="hoja">
+                  <div className="no-print mx-4 mt-4 text-xs text-slate-500 flex flex-wrap gap-x-4 gap-y-1">
+                    <span className="font-medium text-slate-700">{h.sector}:</span>
+                    <label className="flex items-center gap-1">
+                      Bloques de registro (fecha / cant. / firma)
+                      <select value={nReg} onChange={(e) => setRegistros((prev) => ({ ...prev, [h.sectorId]: parseInt(e.target.value) }))} className="border border-slate-300 rounded px-1 py-0.5">
+                        {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}</option>)}
+                      </select>
+                    </label>
+                    {posibles(h).map((c) => (
+                      <label key={c.key} className="flex items-center gap-1 cursor-pointer">
+                        <input type="checkbox" checked={!!(colsPorHoja[h.sectorId] || {})[c.key]}
+                          onChange={(e) => setColsPorHoja((prev) => ({ ...prev, [h.sectorId]: { ...(prev[h.sectorId] || {}), [c.key]: e.target.checked } }))} />{c.label}
+                      </label>
+                    ))}
                   </div>
-                  {imprimiendo.notas && <div className="text-sm mb-3 border border-slate-300 rounded px-2 py-1">Obs.: {imprimiendo.notas}</div>}
-                  <table className="w-full text-sm border-collapse">
-                    <thead>
-                      <tr className="text-left border-b border-slate-400">
-                        <th className="py-1.5 pr-2">{tituloNombre(h)}</th>
-                        <th className="py-1.5 pr-2 text-right">Cantidad</th>
-                        {columnas.map((c) => <th key={c.key} className="py-1.5 pr-2 font-semibold">{c.label}</th>)}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {h.rows.map((r) => (
-                        <tr key={r.key} className="border-b border-slate-300 align-top" style={{ height: '34px' }}>
-                          <td className="py-1.5 pr-2 font-semibold">{r.nombre}</td>
-                          <td className="py-1.5 pr-2 text-right font-bold text-base">{num(r.cantidad)}</td>
-                          {columnas.map((c) => {
-                            if (c.key === 'fecha' || c.key === 'hecho' || c.key === 'firma') return <td key={c.key} className="py-1.5 pr-2" style={{ minWidth: c.key === 'firma' ? '120px' : '70px', borderLeft: '1px solid #cbd5e1' }}></td>
-                            if (c.key === 'diseno') return (
-                              <td key={c.key} className="py-1.5 pr-2 text-xs break-all" style={{ maxWidth: '200px' }}>
-                                {r.cells.diseno ? <a href={r.cells.diseno} target="_blank" rel="noopener noreferrer" className="text-blue-700 underline">{r.cells.diseno}</a> : ''}
-                                {r.cells.diseno_obs ? <div className="text-slate-500">{r.cells.diseno_obs}</div> : null}
-                              </td>
-                            )
-                            return <td key={c.key} className="py-1.5 pr-2">{r.cells[c.key] || ''}</td>
-                          })}
+                  <section className="sheet bg-white m-4 mt-1 p-6 shadow-sm border border-slate-200 print:m-0 print:shadow-none print:border-0">
+                    <div className="flex items-start justify-between border-b-2 border-slate-800 pb-2 mb-3">
+                      <div className="flex items-start gap-4">
+                        <div style={{ background: '#0f172a', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' } as any} className="rounded px-3 py-2 shrink-0">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src="/logo_troya_white.png" alt="Troya" style={{ height: '34px', width: 'auto' }} />
+                        </div>
+                        <div>
+                          <div className="text-2xl font-bold text-slate-900">{h.sector.toUpperCase()}</div>
+                          <div className="text-sm text-slate-700">{p ? `${p.code} · ${p.name}` : ''}</div>
+                        </div>
+                      </div>
+                      <div className="text-right text-sm text-slate-700">
+                        <div className="text-lg font-bold">{nroOP(imprimiendo.numero)}</div>
+                        <div>Cantidad a producir: <b>{num(imprimiendo.cantidad)}</b></div>
+                        <div>Fecha de emisión: {fechaAR(imprimiendo.fecha_emision)}</div>
+                      </div>
+                    </div>
+                    {imprimiendo.notas && <div className="text-sm mb-3 border border-slate-300 rounded px-2 py-1">Obs.: {imprimiendo.notas}</div>}
+                    <table className="w-full text-sm border-collapse" style={{ borderTop: '1px solid #94a3b8' }}>
+                      <thead>
+                        <tr className="text-left">
+                          {antes.map((c) => <th key={c.key} rowSpan={2} className="py-1 pr-2 font-semibold border border-slate-400 px-1.5">{c.label}</th>)}
+                          <th rowSpan={2} className="py-1 pr-2 border border-slate-400 px-1.5">{tituloNombre(h)}</th>
+                          <th rowSpan={2} className="py-1 text-center border border-slate-400 px-1.5">Cantidad</th>
+                          {despues.map((c) => <th key={c.key} rowSpan={2} className="py-1 font-semibold border border-slate-400 px-1.5">{c.label}</th>)}
+                          <th colSpan={nReg * 3} className="py-1 text-center font-semibold border border-slate-400">Registro de producción (un bloque por día o turno)</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </section>
+                        <tr className="text-xs text-slate-600">
+                          {Array.from({ length: nReg }).map((_, b) => (
+                            <Fragment key={b}>
+                              <th key={`f${b}`} className="border border-slate-400 py-0.5" style={{ width: '16mm' }}>Fecha</th>
+                              <th key={`c${b}`} className="border border-slate-400 py-0.5" style={{ width: '14mm' }}>Cant.</th>
+                              <th key={`o${b}`} className="border border-slate-400 py-0.5" style={{ width: '24mm' }}>Operario</th>
+                            </Fragment>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {h.rows.map((r) => (
+                          <tr key={r.key} className="align-top" style={{ height: `${altoFila}mm` }}>
+                            {antes.map((c) => <td key={c.key} className="border border-slate-400 px-1.5 py-1">{r.cells[c.key] || ''}</td>)}
+                            <td className="border border-slate-400 px-1.5 py-1 font-semibold">{r.nombre}</td>
+                            <td className="border border-slate-400 px-1.5 py-1 text-center font-bold text-lg">{num(r.cantidad)}</td>
+                            {despues.map((c) => {
+                              if (c.key === 'obs') return <td key={c.key} className="border border-slate-400" style={{ minWidth: '28mm' }}></td>
+                              if (c.key === 'diseno') return (
+                                <td key={c.key} className="border border-slate-400 px-1.5 py-1 text-xs break-all" style={{ maxWidth: '45mm' }}>
+                                  {r.cells.diseno ? <a href={r.cells.diseno} target="_blank" rel="noopener noreferrer" className="text-blue-700 underline">{r.cells.diseno}</a> : ''}
+                                  {r.cells.diseno_obs ? <div className="text-slate-500">{r.cells.diseno_obs}</div> : null}
+                                </td>
+                              )
+                              return <td key={c.key} className="border border-slate-400 px-1.5 py-1">{r.cells[c.key] || ''}</td>
+                            })}
+                            {Array.from({ length: nReg * 3 }).map((_, k) => <td key={`b${k}`} className="border border-slate-400"></td>)}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </section>
+                </div>
               )
             })}
           </div>
