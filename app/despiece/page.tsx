@@ -248,6 +248,8 @@ export default function DespiecePage() {
   const sectoresEnsamble = sectors.filter((s) => ENSAMBLE.test(s.name) && !EMBALAJE.test(s.name))
   const sectoresProducto = sectors.filter((s) => EMBALAJE.test(s.name))
 
+  // Unidad de la medida = la unidad del material (m², mm, kg, etc.), tal como está cargada en Stock MP
+  function unidadDe(l: any) { const m = l.material_id ? matById[l.material_id] : null; return m && m.unidad_medida ? m.unidad_medida : '' }
   function esLaser(l: any) { return l.tipo === 'pieza' && !!laserSector && (lineaSectores[l.id] || []).includes(laserSector.id) }
   function totalLinea(l: any) { return Number(l.medida) * Number(l.cantidad) }
 
@@ -493,7 +495,7 @@ export default function DespiecePage() {
                     <tr className="text-left text-xs text-slate-400">
                       <th className="py-2 pr-3 font-normal">Pieza</th>
                       <th className="py-2 pr-3 font-normal">Materia prima</th>
-                      <th className="py-2 pr-3 font-normal text-right">m²</th>
+                      <th className="py-2 pr-3 font-normal text-right">Medida</th>
                       <th className="py-2 pr-3 font-normal text-right">Cant.</th>
                       <th className="py-2 pr-3 font-normal">Pasa por</th>
                       <th className="py-2 pr-3 font-normal">Diseño</th>
@@ -515,6 +517,7 @@ export default function DespiecePage() {
                         <td className="py-2 pr-3 min-w-[240px]">{materiaPrimaCell(l)}</td>
                         <td className="py-2 pr-3 text-right whitespace-nowrap">
                           <EditCell value={String(l.medida)} type="number" align="right" canEdit={canEdit} display={num(l.medida, 6)} onSave={(v) => saveNum(l, 'medida', v)} />
+                          <span className="ml-1 text-[11px] text-slate-400">{unidadDe(l)}</span>
                         </td>
                         <td className="py-2 pr-3 text-right">
                           <EditCell value={String(l.cantidad)} type="number" align="right" canEdit={canEdit} display={num(l.cantidad)} onSave={(v) => saveNum(l, 'cantidad', v)} />
@@ -613,8 +616,8 @@ export default function DespiecePage() {
                     <tr key={i} className={`border-t border-slate-100 ${dif ? 'bg-amber-50' : ''}`}>
                       <td className="py-1.5 pr-3"><span className="text-slate-400 mr-1">{mat?.codigo}</span>{mat?.nombre || '—'}</td>
                       <td className="py-1.5 pr-3 text-xs">{c.sector_id ? (secById[c.sector_id]?.name || '—') : <span className="text-red-500">sin sector</span>}</td>
-                      <td className="py-1.5 pr-3 text-right">{num(c.actual)}</td>
-                      <td className="py-1.5 pr-3 text-right">{num(c.despiece)}</td>
+                      <td className="py-1.5 pr-3 text-right">{num(c.actual)} <span className="text-[11px] text-slate-400">{mat?.unidad_medida || ''}</span></td>
+                      <td className="py-1.5 pr-3 text-right">{num(c.despiece)} <span className="text-[11px] text-slate-400">{mat?.unidad_medida || ''}</span></td>
                     </tr>
                   )
                 })}
