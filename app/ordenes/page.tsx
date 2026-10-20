@@ -215,7 +215,7 @@ export default function OrdenesPage() {
           })),
         })
       } else if (PRODUCT_OK(s.name)) {
-        if (!prodSecs.includes(s.id)) return
+        // El embalaje sale en todas las OP (todo producto se embala), aunque no esté tildado en el despiece
         out.push({
           sectorId: s.id, sector: s.name, tipo: 'producto',
           rows: [{ key: pid, nombre: producto ? producto.name : 'Producto', cantidad: cant, cells: {} }],
@@ -280,7 +280,7 @@ export default function OrdenesPage() {
           .preview-root { position: absolute !important; inset: auto !important; left: 0; top: 0; width: 100%; height: auto !important; overflow: visible !important; background: #fff !important; }
           .print-area, .print-area * { visibility: visible !important; }
           .print-area { width: 100%; }
-          .hoja { page-break-after: always; break-after: page; }
+          .hoja { page-break-after: always; break-after: page; page-break-inside: avoid; break-inside: avoid; }
           .hoja:last-child { page-break-after: auto; break-after: auto; }
           .sheet { margin: 0 !important; padding: 0 !important; border: 0 !important; box-shadow: none !important; }
           thead { display: table-header-group; }
@@ -400,11 +400,16 @@ export default function OrdenesPage() {
             {hojas.filter((h) => hojasOn[h.sectorId]).map((h) => {
               const columnas = columnasDe(h)
               const antes = columnas.filter((c) => c.key === 'proceso' || c.key === 'material')
-              const despues = columnas.filter((c) => c.key !== 'proceso' && c.key !== 'material')
+              const medio = columnas.filter((c) => c.key !== 'proceso' && c.key !== 'material' && c.key !== 'obs')
+              const conObs = columnas.some((c) => c.key === 'obs')
               const p = prodById[imprimiendo.product_id]
               const nReg = registros[h.sectorId] || 3
-              // Altura de cada fila: reparte el largo de la hoja (A4 horizontal ~ 145 mm útiles para filas)
-              const altoFila = Math.max(9, Math.min(40, Math.floor(145 / Math.max(1, h.rows.length))))
+              // Cada sector entra en UNA hoja: si hay muchas filas o muchas columnas, se achica todo en proporción (nunca se estira)
+              const altoFila = 11 // mm, tamaño fijo y legible
+              const zoomAlto = Math.min(1, 118 / (Math.max(1, h.rows.length) * altoFila))
+              const anchoNec = 20 + 40 + antes.length * 40 + medio.length * 30 + (conObs ? 28 : 0) + nReg * 45
+              const zoomAncho = Math.min(1, 275 / anchoNec)
+              const zoom = Math.max(0.5, Math.min(zoomAlto, zoomAncho))
               return (
                 <div key={h.sectorId} className="hoja">
                   <div className="no-print mx-4 mt-4 text-xs text-slate-500 flex flex-wrap gap-x-4 gap-y-1">
@@ -421,66 +426,75 @@ export default function OrdenesPage() {
                           onChange={(e) => setColsPorHoja((prev) => ({ ...prev, [h.sectorId]: { ...(prev[h.sectorId] || {}), [c.key]: e.target.checked } }))} />{c.label}
                       </label>
                     ))}
+                    {zoom < 1 && <span className="text-amber-700">Hay muchas filas o columnas: se achica para que entre en 1 hoja ({Math.round(zoom * 100)}%).</span>}
                   </div>
                   <section className="sheet bg-white m-4 mt-1 p-6 shadow-sm border border-slate-200 print:m-0 print:shadow-none print:border-0">
-                    <div className="flex items-start justify-between border-b-2 border-slate-800 pb-2 mb-3">
-                      <div className="flex items-start gap-4">
-                        <div style={{ background: '#0f172a', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' } as any} className="rounded px-3 py-2 shrink-0">
+                    <div style={{ zoom } as any}>
+                      <div className="flex items-end justify-between mb-2">
+                        <div className="flex items-end gap-4">
                           {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src="/logo_troya_white.png" alt="Troya" style={{ height: '34px', width: 'auto' }} />
+                          <img src="/logo_troya_white.png" alt="Troya" style={{ height: '26px', width: 'auto', filter: 'brightness(0)' }} />
+                          <div className="text-3xl font-extrabold text-slate-900 leading-none">{h.sector.toUpperCase()}</div>
                         </div>
-                        <div>
-                          <div className="text-2xl font-bold text-slate-900">{h.sector.toUpperCase()}</div>
-                          <div className="text-sm text-slate-700">{p ? `${p.code} · ${p.name}` : ''}</div>
+                        <div className="text-xs text-slate-600">Fecha de emisión: {fechaAR(imprimiendo.fecha_emision)}</div>
+                      </div>
+                      <div className="flex items-stretch border-2 border-slate-900 mb-3">
+                        <div className="px-3 py-1.5 border-r-2 border-slate-900">
+                          <div className="text-[10px] uppercase tracking-wide text-slate-500">Orden</div>
+                          <div className="text-3xl font-extrabold leading-tight">{nroOP(imprimiendo.numero)}</div>
+                        </div>
+                        <div className="px-3 py-1.5 flex-1 border-r-2 border-slate-900">
+                          <div className="text-[10px] uppercase tracking-wide text-slate-500">Producto</div>
+                          <div className="text-2xl font-extrabold leading-tight uppercase">{p ? `${p.code} · ${p.name}` : ''}</div>
+                        </div>
+                        <div className="px-4 py-1.5 text-center">
+                          <div className="text-[10px] uppercase tracking-wide text-slate-500">Cantidad</div>
+                          <div className="text-4xl font-extrabold leading-tight">{num(imprimiendo.cantidad)}</div>
                         </div>
                       </div>
-                      <div className="text-right text-sm text-slate-700">
-                        <div className="text-lg font-bold">{nroOP(imprimiendo.numero)}</div>
-                        <div>Cantidad a producir: <b>{num(imprimiendo.cantidad)}</b></div>
-                        <div>Fecha de emisión: {fechaAR(imprimiendo.fecha_emision)}</div>
-                      </div>
-                    </div>
-                    {imprimiendo.notas && <div className="text-sm mb-3 border border-slate-300 rounded px-2 py-1">Obs.: {imprimiendo.notas}</div>}
-                    <table className="w-full text-sm border-collapse" style={{ borderTop: '1px solid #94a3b8' }}>
-                      <thead>
-                        <tr className="text-left">
-                          {antes.map((c) => <th key={c.key} rowSpan={2} className="py-1 pr-2 font-semibold border border-slate-400 px-1.5">{c.label}</th>)}
-                          <th rowSpan={2} className="py-1 pr-2 border border-slate-400 px-1.5">{tituloNombre(h)}</th>
-                          <th rowSpan={2} className="py-1 text-center border border-slate-400 px-1.5">Cantidad</th>
-                          {despues.map((c) => <th key={c.key} rowSpan={2} className="py-1 font-semibold border border-slate-400 px-1.5">{c.label}</th>)}
-                          <th colSpan={nReg * 3} className="py-1 text-center font-semibold border border-slate-400">Registro de producción (un bloque por día o turno)</th>
-                        </tr>
-                        <tr className="text-xs text-slate-600">
-                          {Array.from({ length: nReg }).map((_, b) => (
-                            <Fragment key={b}>
-                              <th key={`f${b}`} className="border border-slate-400 py-0.5" style={{ width: '16mm' }}>Fecha</th>
-                              <th key={`c${b}`} className="border border-slate-400 py-0.5" style={{ width: '14mm' }}>Cant.</th>
-                              <th key={`o${b}`} className="border border-slate-400 py-0.5" style={{ width: '24mm' }}>Operario</th>
-                            </Fragment>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {h.rows.map((r) => (
-                          <tr key={r.key} className="align-top" style={{ height: `${altoFila}mm` }}>
-                            {antes.map((c) => <td key={c.key} className="border border-slate-400 px-1.5 py-1">{r.cells[c.key] || ''}</td>)}
-                            <td className="border border-slate-400 px-1.5 py-1 font-semibold">{r.nombre}</td>
-                            <td className="border border-slate-400 px-1.5 py-1 text-center font-bold text-lg">{num(r.cantidad)}</td>
-                            {despues.map((c) => {
-                              if (c.key === 'obs') return <td key={c.key} className="border border-slate-400" style={{ minWidth: '28mm' }}></td>
-                              if (c.key === 'diseno') return (
-                                <td key={c.key} className="border border-slate-400 px-1.5 py-1 text-xs break-all" style={{ maxWidth: '45mm' }}>
-                                  {r.cells.diseno ? <a href={r.cells.diseno} target="_blank" rel="noopener noreferrer" className="text-blue-700 underline">{r.cells.diseno}</a> : ''}
-                                  {r.cells.diseno_obs ? <div className="text-slate-500">{r.cells.diseno_obs}</div> : null}
-                                </td>
-                              )
-                              return <td key={c.key} className="border border-slate-400 px-1.5 py-1">{r.cells[c.key] || ''}</td>
-                            })}
-                            {Array.from({ length: nReg * 3 }).map((_, k) => <td key={`b${k}`} className="border border-slate-400"></td>)}
+                      {imprimiendo.notas && <div className="text-sm mb-3 border border-slate-400 rounded px-2 py-1 uppercase">Obs.: {imprimiendo.notas}</div>}
+                      <table className="w-full text-sm border-collapse">
+                        <thead>
+                          <tr className="text-left">
+                            {antes.map((c) => <th key={c.key} rowSpan={2} className="py-1 font-semibold border border-slate-500 px-1.5">{c.label}</th>)}
+                            <th rowSpan={2} className="py-1 border border-slate-500 px-1.5">{tituloNombre(h)}</th>
+                            <th rowSpan={2} className="py-1 text-center border border-slate-500 px-1.5">Cantidad</th>
+                            {medio.map((c) => <th key={c.key} rowSpan={2} className="py-1 font-semibold border border-slate-500 px-1.5">{c.label}</th>)}
+                            <th colSpan={nReg * 3} className="py-1 text-center font-semibold border border-slate-500">Registro de producción (un bloque por día o turno)</th>
+                            {conObs && <th rowSpan={2} className="py-1 font-semibold border border-slate-500 px-1.5">Observaciones</th>}
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                          <tr className="text-xs text-slate-600">
+                            {Array.from({ length: nReg }).map((_, b) => (
+                              <Fragment key={b}>
+                                <th className="border border-slate-500 py-0.5" style={{ width: '15mm' }}>Fecha</th>
+                                <th className="border border-slate-500 py-0.5" style={{ width: '12mm' }}>Cant.</th>
+                                <th className="border border-slate-500 py-0.5" style={{ width: '22mm' }}>Operario</th>
+                              </Fragment>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody className="uppercase">
+                          {h.rows.map((r) => (
+                            <tr key={r.key} className="align-top" style={{ height: `${altoFila}mm` }}>
+                              {antes.map((c) => <td key={c.key} className="border border-slate-500 px-1.5 py-1" style={{ minWidth: '38mm' }}>{r.cells[c.key] || ''}</td>)}
+                              <td className="border border-slate-500 px-1.5 py-1 font-semibold" style={{ minWidth: '34mm' }}>{r.nombre}</td>
+                              <td className="border border-slate-500 px-1.5 py-1 text-center font-bold text-lg">{num(r.cantidad)}</td>
+                              {medio.map((c) => {
+                                if (c.key === 'diseno') return (
+                                  <td key={c.key} className="border border-slate-500 px-1.5 py-1 text-xs break-all normal-case" style={{ maxWidth: '45mm' }}>
+                                    {r.cells.diseno ? <a href={r.cells.diseno} target="_blank" rel="noopener noreferrer" className="text-blue-700 underline">{r.cells.diseno}</a> : ''}
+                                    {r.cells.diseno_obs ? <div className="text-slate-500">{r.cells.diseno_obs}</div> : null}
+                                  </td>
+                                )
+                                return <td key={c.key} className="border border-slate-500 px-1.5 py-1">{r.cells[c.key] || ''}</td>
+                              })}
+                              {Array.from({ length: nReg * 3 }).map((_, k) => <td key={`b${k}`} className="border border-slate-500"></td>)}
+                              {conObs && <td className="border border-slate-500" style={{ minWidth: '28mm' }}></td>}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </section>
                 </div>
               )
