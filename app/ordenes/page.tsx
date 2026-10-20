@@ -430,45 +430,56 @@ export default function OrdenesPage() {
                   </div>
                   <section className="sheet bg-white m-4 mt-1 p-6 shadow-sm border border-slate-200 print:m-0 print:shadow-none print:border-0">
                     <div style={{ zoom } as any}>
-                      <div className="flex items-end justify-between mb-2">
-                        <div className="flex items-end gap-4">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src="/logo_troya_white.png" alt="Troya" style={{ height: '26px', width: 'auto', filter: 'brightness(0)' }} />
-                          <div className="text-3xl font-extrabold text-slate-900 leading-none">{h.sector.toUpperCase()}</div>
+                      {/* Franja superior: marca | sector (centro, separado por líneas) | emisión */}
+                      <div className="grid items-center mb-3 pb-2 border-b border-slate-300" style={{ gridTemplateColumns: '1fr auto 1fr' }}>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src="/logo_troya_white.png" alt="Troya" style={{ height: '24px', width: 'auto', filter: 'brightness(0)' }} />
+                        <div className="px-8 mx-6 text-center border-x border-slate-300">
+                          <div className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Sector</div>
+                          <div className="text-3xl font-bold text-slate-900 tracking-wide leading-tight">{h.sector.toUpperCase()}</div>
                         </div>
-                        <div className="text-xs text-slate-600">Fecha de emisión: {fechaAR(imprimiendo.fecha_emision)}</div>
-                      </div>
-                      <div className="flex items-stretch border-2 border-slate-900 mb-3">
-                        <div className="px-3 py-1.5 border-r-2 border-slate-900">
-                          <div className="text-[10px] uppercase tracking-wide text-slate-500">Orden</div>
-                          <div className="text-3xl font-extrabold leading-tight">{nroOP(imprimiendo.numero)}</div>
-                        </div>
-                        <div className="px-3 py-1.5 flex-1 border-r-2 border-slate-900">
-                          <div className="text-[10px] uppercase tracking-wide text-slate-500">Producto</div>
-                          <div className="text-2xl font-extrabold leading-tight uppercase">{p ? `${p.code} · ${p.name}` : ''}</div>
-                        </div>
-                        <div className="px-4 py-1.5 text-center">
-                          <div className="text-[10px] uppercase tracking-wide text-slate-500">Cantidad</div>
-                          <div className="text-4xl font-extrabold leading-tight">{num(imprimiendo.cantidad)}</div>
+                        <div className="text-right">
+                          <div className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Fecha de emisión</div>
+                          <div className="text-sm font-semibold text-slate-800">{fechaAR(imprimiendo.fecha_emision)}</div>
                         </div>
                       </div>
-                      {imprimiendo.notas && <div className="text-sm mb-3 border border-slate-400 rounded px-2 py-1 uppercase">Obs.: {imprimiendo.notas}</div>}
+                      {/* Datos de la orden: mismo estilo en las 3 casillas */}
+                      <div className="grid border border-slate-400 mb-2" style={{ gridTemplateColumns: 'auto 1fr auto' }}>
+                        <div className="px-4 py-2 border-r border-slate-400">
+                          <div className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Orden</div>
+                          <div className="text-2xl font-bold text-slate-900 leading-tight">{nroOP(imprimiendo.numero)}</div>
+                        </div>
+                        <div className="px-4 py-2 border-r border-slate-400">
+                          <div className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Producto</div>
+                          <div className="text-2xl font-bold text-slate-900 leading-tight uppercase">{p ? `${p.code} · ${p.name}` : ''}</div>
+                        </div>
+                        <div className="px-6 py-2 text-center">
+                          <div className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Cantidad</div>
+                          <div className="text-3xl font-bold text-slate-900 leading-tight">{num(imprimiendo.cantidad)}</div>
+                        </div>
+                      </div>
+                      {imprimiendo.notas && (
+                        <div className="mb-3 flex items-baseline gap-2 text-sm">
+                          <span className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Observaciones</span>
+                          <span className="font-semibold text-slate-800 uppercase">{imprimiendo.notas}</span>
+                        </div>
+                      )}
                       <table className="w-full text-sm border-collapse">
                         <thead>
                           <tr className="text-left">
-                            {antes.map((c) => <th key={c.key} rowSpan={2} className="py-1 font-semibold border border-slate-500 px-1.5">{c.label}</th>)}
-                            <th rowSpan={2} className="py-1 border border-slate-500 px-1.5">{tituloNombre(h)}</th>
-                            <th rowSpan={2} className="py-1 text-center border border-slate-500 px-1.5">Cantidad</th>
-                            {medio.map((c) => <th key={c.key} rowSpan={2} className="py-1 font-semibold border border-slate-500 px-1.5">{c.label}</th>)}
-                            <th colSpan={nReg * 3} className="py-1 text-center font-semibold border border-slate-500">Registro de producción (un bloque por día o turno)</th>
-                            {conObs && <th rowSpan={2} className="py-1 font-semibold border border-slate-500 px-1.5">Observaciones</th>}
+                            {antes.map((c) => <th key={c.key} rowSpan={2} className="py-1 border border-slate-400 px-1.5 text-[11px] uppercase tracking-wider font-semibold text-slate-600 bg-slate-50">{c.label}</th>)}
+                            <th rowSpan={2} className="py-1 border border-slate-400 px-1.5 text-[11px] uppercase tracking-wider font-semibold text-slate-600 bg-slate-50">{tituloNombre(h)}</th>
+                            <th rowSpan={2} className="py-1 text-center border border-slate-400 px-1.5 text-[11px] uppercase tracking-wider font-semibold text-slate-600 bg-slate-50">Cantidad</th>
+                            {medio.map((c) => <th key={c.key} rowSpan={2} className="py-1 border border-slate-400 px-1.5 text-[11px] uppercase tracking-wider font-semibold text-slate-600 bg-slate-50">{c.label}</th>)}
+                            <th colSpan={nReg * 3} className="py-1 text-center border border-slate-400 text-[11px] uppercase tracking-wider font-semibold text-slate-600 bg-slate-50">Registro por día o turno</th>
+                            {conObs && <th rowSpan={2} className="py-1 border border-slate-400 px-1.5 text-[11px] uppercase tracking-wider font-semibold text-slate-600 bg-slate-50">Observaciones</th>}
                           </tr>
                           <tr className="text-xs text-slate-600">
                             {Array.from({ length: nReg }).map((_, b) => (
                               <Fragment key={b}>
-                                <th className="border border-slate-500 py-0.5" style={{ width: '15mm' }}>Fecha</th>
-                                <th className="border border-slate-500 py-0.5" style={{ width: '12mm' }}>Cant.</th>
-                                <th className="border border-slate-500 py-0.5" style={{ width: '22mm' }}>Operario</th>
+                                <th className="border border-slate-400 py-0.5 text-[10px] uppercase tracking-wider font-medium text-slate-500 bg-slate-50" style={{ width: '15mm' }}>Fecha</th>
+                                <th className="border border-slate-400 py-0.5 text-[10px] uppercase tracking-wider font-medium text-slate-500 bg-slate-50" style={{ width: '12mm' }}>Cant.</th>
+                                <th className="border border-slate-400 py-0.5 text-[10px] uppercase tracking-wider font-medium text-slate-500 bg-slate-50" style={{ width: '22mm' }}>Operario</th>
                               </Fragment>
                             ))}
                           </tr>
@@ -476,20 +487,20 @@ export default function OrdenesPage() {
                         <tbody className="uppercase">
                           {h.rows.map((r) => (
                             <tr key={r.key} className="align-top" style={{ height: `${altoFila}mm` }}>
-                              {antes.map((c) => <td key={c.key} className="border border-slate-500 px-1.5 py-1" style={{ minWidth: '38mm' }}>{r.cells[c.key] || ''}</td>)}
-                              <td className="border border-slate-500 px-1.5 py-1 font-semibold" style={{ minWidth: '34mm' }}>{r.nombre}</td>
-                              <td className="border border-slate-500 px-1.5 py-1 text-center font-bold text-lg">{num(r.cantidad)}</td>
+                              {antes.map((c) => <td key={c.key} className="border border-slate-400 px-1.5 py-1" style={{ minWidth: '38mm' }}>{r.cells[c.key] || ''}</td>)}
+                              <td className="border border-slate-400 px-1.5 py-1 font-semibold" style={{ minWidth: '34mm' }}>{r.nombre}</td>
+                              <td className="border border-slate-400 px-1.5 py-1 text-center font-bold text-lg">{num(r.cantidad)}</td>
                               {medio.map((c) => {
                                 if (c.key === 'diseno') return (
-                                  <td key={c.key} className="border border-slate-500 px-1.5 py-1 text-xs break-all normal-case" style={{ maxWidth: '45mm' }}>
+                                  <td key={c.key} className="border border-slate-400 px-1.5 py-1 text-xs break-all normal-case" style={{ maxWidth: '45mm' }}>
                                     {r.cells.diseno ? <a href={r.cells.diseno} target="_blank" rel="noopener noreferrer" className="text-blue-700 underline">{r.cells.diseno}</a> : ''}
                                     {r.cells.diseno_obs ? <div className="text-slate-500">{r.cells.diseno_obs}</div> : null}
                                   </td>
                                 )
-                                return <td key={c.key} className="border border-slate-500 px-1.5 py-1">{r.cells[c.key] || ''}</td>
+                                return <td key={c.key} className="border border-slate-400 px-1.5 py-1">{r.cells[c.key] || ''}</td>
                               })}
-                              {Array.from({ length: nReg * 3 }).map((_, k) => <td key={`b${k}`} className="border border-slate-500"></td>)}
-                              {conObs && <td className="border border-slate-500" style={{ minWidth: '28mm' }}></td>}
+                              {Array.from({ length: nReg * 3 }).map((_, k) => <td key={`b${k}`} className="border border-slate-400"></td>)}
+                              {conObs && <td className="border border-slate-400" style={{ minWidth: '28mm' }}></td>}
                             </tr>
                           ))}
                         </tbody>
