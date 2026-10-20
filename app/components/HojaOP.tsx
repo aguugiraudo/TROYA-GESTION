@@ -165,7 +165,7 @@ export default function HojaOP({ order, onClose }: { order: any; onClose: () => 
 
   const visibles = hojas.filter((h) => hojasOn[h.sectorId])
   const microLabel = 'text-[10px] uppercase tracking-[0.2em] text-slate-400'
-  const th = 'py-1 border border-slate-400 px-1.5 text-[11px] uppercase tracking-wider font-semibold text-slate-600 bg-slate-50'
+  const th = 'py-1 border border-slate-400 px-1.5 text-[11px] uppercase tracking-wider font-semibold text-slate-600'
 
   const contenido = (
     <div className="op-portal">
@@ -180,7 +180,8 @@ export default function HojaOP({ order, onClose }: { order: any; onClose: () => 
           .sector-block.nuevo-pliego { break-before: page; page-break-before: always; }
           thead { display: table-header-group; }
           tr { break-inside: avoid; page-break-inside: avoid; }
-          * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          /* Sin ningún relleno ni sombra: solo líneas y texto, para gastar poca tinta */
+          .op-portal, .op-portal * { background: transparent !important; box-shadow: none !important; }
         }
       `}</style>
       <div className="preview-root fixed inset-0 z-[60] bg-slate-100 overflow-y-auto">
@@ -280,7 +281,7 @@ export default function HojaOP({ order, onClose }: { order: any; onClose: () => 
                   <table className="w-full text-sm border-collapse">
                     <thead>
                       <tr>
-                        <th colSpan={total} className="text-left px-2 py-1.5 bg-slate-200 border border-slate-500 text-base font-bold tracking-[0.15em] text-slate-900">{h.sector.toUpperCase()}</th>
+                        <th colSpan={total} className="text-left px-2 py-1.5 border-2 border-slate-900 text-base font-bold tracking-[0.15em] text-slate-900">{h.sector.toUpperCase()}</th>
                       </tr>
                       <tr className="text-left">
                         {antes.map((c) => <th key={c.key} rowSpan={2} className={th}>{c.label}</th>)}
@@ -293,9 +294,9 @@ export default function HojaOP({ order, onClose }: { order: any; onClose: () => 
                       <tr>
                         {Array.from({ length: nReg }).map((_, b) => (
                           <Fragment key={b}>
-                            <th className="border border-slate-400 py-0.5 text-[10px] uppercase tracking-wider font-medium text-slate-500 bg-slate-50" style={{ width: '16mm' }}>Fecha</th>
-                            <th className="border border-slate-400 py-0.5 text-[10px] uppercase tracking-wider font-medium text-slate-500 bg-slate-50" style={{ width: '13mm' }}>Cant.</th>
-                            <th className="border border-slate-400 py-0.5 text-[10px] uppercase tracking-wider font-medium text-slate-500 bg-slate-50" style={{ width: '26mm' }}>Operario</th>
+                            <th className="border border-slate-400 py-0.5 text-[10px] uppercase tracking-wider font-medium text-slate-500" style={{ width: '16mm' }}>Fecha</th>
+                            <th className="border border-slate-400 py-0.5 text-[10px] uppercase tracking-wider font-medium text-slate-500" style={{ width: '13mm' }}>Cant.</th>
+                            <th className="border border-slate-400 py-0.5 text-[10px] uppercase tracking-wider font-medium text-slate-500" style={{ width: '26mm' }}>Operario</th>
                           </Fragment>
                         ))}
                       </tr>
