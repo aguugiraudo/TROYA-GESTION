@@ -32,6 +32,7 @@ const groups = [
     label: 'Ingeniería',
     tabs: [
       { href: '/base-datos', label: 'Catálogo de Productos', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
+      { href: '/despiece', label: 'Despiece', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
     ],
   },
   {
