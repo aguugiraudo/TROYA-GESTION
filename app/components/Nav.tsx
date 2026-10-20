@@ -11,6 +11,7 @@ const groups = [
     label: 'Producción',
     tabs: [
       { href: '/pedidos', label: 'Pedidos', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
+      { href: '/ordenes', label: 'Órdenes de Producción', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
       { href: '/', label: 'Cola de Producción', roles: ['perfil_1', 'perfil_2', 'perfil_3', 'perfil_4'] },
       { href: '/plan-turnos', label: 'Turnos y Operarios', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
       { href: '/control-general', label: 'Avance de Producción', roles: ['perfil_1', 'perfil_2', 'perfil_3', 'perfil_4'] },
