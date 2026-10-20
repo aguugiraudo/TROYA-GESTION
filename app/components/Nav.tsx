@@ -7,9 +7,10 @@ import { useAuth } from './AuthGate'
 
 const groups = [
   {
-    key: 'programacion',
-    label: 'Programación',
+    key: 'produccion',
+    label: 'Producción',
     tabs: [
+      { href: '/pedidos', label: 'Pedidos', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
       { href: '/', label: 'Cola de Producción', roles: ['perfil_1', 'perfil_2', 'perfil_3', 'perfil_4'] },
       { href: '/plan-turnos', label: 'Turnos y Operarios', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
       { href: '/control-general', label: 'Avance de Producción', roles: ['perfil_1', 'perfil_2', 'perfil_3', 'perfil_4'] },
@@ -19,14 +20,26 @@ const groups = [
     ],
   },
   {
+    key: 'inventario',
+    label: 'Inventario',
+    tabs: [
+      { href: '/materia-prima', label: 'Stock MP', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
+      { href: '/insumos', label: 'Insumos', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
+    ],
+  },
+  {
+    key: 'ingenieria',
+    label: 'Ingeniería',
+    tabs: [
+      { href: '/base-datos', label: 'Catálogo de Productos', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
+    ],
+  },
+  {
     key: 'reportes',
     label: 'Reportes',
     tabs: [
       { href: '/historial', label: 'Historial de Órdenes', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
       { href: '/rendimiento', label: 'Rendimiento de Operarios', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
-      { href: '/base-datos', label: 'Catálogo de Productos', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
-      { href: '/insumos', label: 'Insumos', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
-      { href: '/materia-prima', label: 'Stock MP', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
     ],
   },
 ]
