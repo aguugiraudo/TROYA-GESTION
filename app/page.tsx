@@ -5,13 +5,14 @@ import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from 
 import { arrayMove, SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { useAuth } from './components/AuthGate'
+import HojaOP from './components/HojaOP'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-function SortableCard({ order, onEdit, onDelete, canEdit }: { order: any; onEdit: (o: any) => void; onDelete: (id: string) => void; canEdit: boolean }) {
+function SortableCard({ order, onEdit, onDelete, onPrint, canEdit }: { order: any; onEdit: (o: any) => void; onDelete: (id: string) => void; onPrint: (o: any) => void; canEdit: boolean }) {
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: order.id, disabled: !canEdit })
   const style = { transform: CSS.Transform.toString(transform), transition }
   return (
@@ -24,12 +25,11 @@ function SortableCard({ order, onEdit, onDelete, canEdit }: { order: any; onEdit
         <p className="text-sm text-slate-500">Cantidad: {order.lot_quantity}</p>
         {order.notes && <p className="text-sm text-slate-400 italic mt-1">Obs: {order.notes}</p>}
       </div>
-      {canEdit && (
-        <div className="flex flex-col gap-1 shrink-0">
-          <button onClick={() => onEdit(order)} className="text-xs bg-slate-100 text-slate-600 px-3 py-1 rounded-md hover:bg-slate-200">Editar</button>
-          <button onClick={() => onDelete(order.id)} className="text-xs bg-rose-50 text-rose-600 px-3 py-1 rounded-md hover:bg-rose-100">Eliminar</button>
-        </div>
-      )}
+      <div className="flex flex-col gap-1 shrink-0">
+        <button onClick={() => onPrint(order)} className="text-xs bg-blue-50 text-blue-700 px-3 py-1 rounded-md hover:bg-blue-100">Imprimir OP</button>
+        {canEdit && <button onClick={() => onEdit(order)} className="text-xs bg-slate-100 text-slate-600 px-3 py-1 rounded-md hover:bg-slate-200">Editar</button>}
+        {canEdit && <button onClick={() => onDelete(order.id)} className="text-xs bg-rose-50 text-rose-600 px-3 py-1 rounded-md hover:bg-rose-100">Eliminar</button>}
+      </div>
     </div>
   )
 }
@@ -56,6 +56,8 @@ export default function Home() {
   const [editClientName, setEditClientName] = useState('')
   const [editNotes, setEditNotes] = useState('')
 
+  const [imprimiendo, setImprimiendo] = useState<any | null>(null)
+
   const [pendingManualComplete, setPendingManualComplete] = useState<{ id: string; order_number: string; avance: number | null } | null>(null)
 
   // Desglose Láser: se abre después de crear una OP
@@ -80,6 +82,15 @@ export default function Home() {
 
     const { data: productsData } = await supabase.from('products').select('id, code, name').order('name')
     setProducts(productsData || [])
+
+    // N° de OP siguiente: el mayor número que existe (activas y completadas) + 1. Queda editable.
+    const { data: todos } = await supabase.from('orders').select('order_number')
+    let maxNum = 0
+    ;(todos || []).forEach((o: any) => {
+      const m = String(o.order_number || '').match(/(\d+)\s*$/)
+      if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10))
+    })
+    if (maxNum > 0) setOrderNumber((prev) => (prev === '' ? String(maxNum + 1) : prev))
     setLoading(false)
   }
 
@@ -306,7 +317,7 @@ export default function Home() {
         <form onSubmit={handleCreateOrder} className="bg-white border border-slate-200 rounded-xl shadow-sm p-5 mb-8">
           <h2 className="font-semibold text-slate-700 mb-3">Nueva Orden de Producción</h2>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-            <input placeholder="N° OP" value={orderNumber} onChange={(e) => setOrderNumber(e.target.value)}
+            <input placeholder="N° OP (automático)" value={orderNumber} onChange={(e) => setOrderNumber(e.target.value)}
               className="border border-slate-300 rounded-md px-2 py-1.5 text-sm" />
             <div className="relative">
               <input
@@ -352,7 +363,7 @@ export default function Home() {
             <div className="mb-8">
               {orders.map((order) => (
                 <div key={order.id} className="flex items-center gap-2">
-                  <div className="flex-1"><SortableCard order={order} onEdit={openEdit} onDelete={handleDelete} canEdit={canEdit} /></div>
+                  <div className="flex-1"><SortableCard order={order} onEdit={openEdit} onDelete={handleDelete} onPrint={setImprimiendo} canEdit={canEdit} /></div>
                   {canEdit && (
                     <button onClick={() => askComplete(order)}
                       className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md hover:bg-emerald-700 mb-3">
@@ -379,15 +390,20 @@ export default function Home() {
                 <p className="text-sm text-slate-500">Cliente: {order.client_name} — Cantidad: {order.lot_quantity}</p>
                 {order.notes && <p className="text-sm italic text-slate-400">Obs: {order.notes}</p>}
               </div>
-              {canEdit && (
-                <button onClick={() => handleReopen(order.id)} className="text-xs bg-slate-200 text-slate-700 px-3 py-1.5 rounded-md hover:bg-slate-300 shrink-0">
-                  Reabrir
-                </button>
-              )}
+              <div className="flex flex-col gap-1 shrink-0">
+                <button onClick={() => setImprimiendo(order)} className="text-xs bg-blue-50 text-blue-700 px-3 py-1.5 rounded-md hover:bg-blue-100">Imprimir OP</button>
+                {canEdit && (
+                  <button onClick={() => handleReopen(order.id)} className="text-xs bg-slate-200 text-slate-700 px-3 py-1.5 rounded-md hover:bg-slate-300">
+                    Reabrir
+                  </button>
+                )}
+              </div>
             </div>
           ))}
         </div>
       )}
+
+      {imprimiendo && <HojaOP order={imprimiendo} onClose={() => setImprimiendo(null)} />}
 
       {/* MODAL de edición */}
       {editingOrder && (
