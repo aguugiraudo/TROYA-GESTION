@@ -192,8 +192,8 @@ function ProductCell({
   )
 }
 
-type NewRow = { product_id: string; cantidad: string; cliente: string; personalizado: string }
-const emptyRow = (): NewRow => ({ product_id: '', cantidad: '', cliente: '', personalizado: '' })
+type NewRow = { product_id: string; cantidad: string; cliente: string }
+const emptyRow = (): NewRow => ({ product_id: '', cantidad: '', cliente: '' })
 
 export default function PedidosPage() {
   const { role } = useAuth()
@@ -313,7 +313,6 @@ export default function PedidosPage() {
       fecha: nFecha, sucursal: nSucursal, nro_pedido: nNro.trim() || null, cliente: r.cliente.trim() || null,
       product_id: r.product_id, producto_texto: productsById[r.product_id]?.name || null,
       cantidad: parseFloat(r.cantidad.replace(',', '.')),
-      personalizado: r.personalizado.trim() || null, observacion: null,
       estado: 'pendiente', cantidad_cumplida: 0,
     }))
     const { error } = await supabase.from('pedido_lineas').insert(payload)
@@ -332,7 +331,7 @@ export default function PedidosPage() {
       if (vista === 'anulados' && l.estado !== 'anulado') return false
       if (filtroSucursal && l.sucursal !== filtroSucursal) return false
       if (q) {
-        const hay = [l.nro_pedido, l.cliente, productoNombre(l), productoCodigo(l), l.personalizado]
+        const hay = [l.nro_pedido, l.cliente, productoNombre(l), productoCodigo(l)]
           .filter(Boolean).join(' ').toLowerCase()
         if (!hay.includes(q)) return false
       }
@@ -385,16 +384,16 @@ export default function PedidosPage() {
     const hRes = ['Código', 'Producto', 'Pendiente total', 'Buenos Aires (CTROD)', 'Rafaela (2828)', 'Renglones']
     const bRes = resumen.map((x) => [x.codigo, x.nombre, r(x.total), r(x.porSuc['CTROD'] || 0), r(x.porSuc['2828'] || 0), x.renglones])
     bRes.push(['', 'TOTAL', r(totalPendiente), '', '', ''] as any)
-    const hDet = ['Fecha', 'Sucursal', 'Nº pedido', 'Código', 'Producto', 'Cliente / Observación', 'Cantidad', 'Cumplida', 'Pendiente', 'Personalizado']
+    const hDet = ['Fecha', 'Sucursal', 'Nº pedido', 'Código', 'Producto', 'Cliente / Observación', 'Cantidad', 'Cumplida', 'Pendiente']
     const bDet = pendientes.filter((l) => pendienteDe(l) > 0)
       .sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)))
       .map((l) => [shortDate(l.fecha), sucursalLabel(l.sucursal), l.nro_pedido || '', productoCodigo(l), productoNombre(l), l.cliente || '',
-        r(Number(l.cantidad)), r(Number(l.cantidad_cumplida)), r(pendienteDe(l)), l.personalizado || ''])
+        r(Number(l.cantidad)), r(Number(l.cantidad_cumplida)), r(pendienteDe(l))])
     const wb = XLSX.utils.book_new()
     const ws1 = XLSX.utils.aoa_to_sheet([hRes, ...bRes])
     ws1['!cols'] = [{ wch: 10 }, { wch: 44 }, { wch: 16 }, { wch: 22 }, { wch: 16 }, { wch: 10 }]
     const ws2 = XLSX.utils.aoa_to_sheet([hDet, ...bDet])
-    ws2['!cols'] = [{ wch: 12 }, { wch: 22 }, { wch: 12 }, { wch: 10 }, { wch: 44 }, { wch: 28 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 24 }]
+    ws2['!cols'] = [{ wch: 12 }, { wch: 22 }, { wch: 12 }, { wch: 10 }, { wch: 44 }, { wch: 28 }, { wch: 10 }, { wch: 10 }, { wch: 10 }]
     XLSX.utils.book_append_sheet(wb, ws1, 'Resumen pendientes')
     XLSX.utils.book_append_sheet(wb, ws2, 'Detalle pendientes')
     XLSX.writeFile(wb, 'pedidos_pendientes.xlsx')
@@ -505,14 +504,13 @@ export default function PedidosPage() {
               <Th k="cantidad" right>Cant.</Th>
               <Th k="cumplida" right>Cumplida</Th>
               <Th k="pendiente" right>Pendiente</Th>
-              <th className="p-2 font-medium">Personalizado</th>
               <Th k="estado">Estado</Th>
               {canEdit && <th className="p-2 font-medium">Acciones</th>}
             </tr>
           </thead>
           <tbody>
             {visibles.length === 0 && (
-              <tr><td colSpan={canEdit ? 10 : 9} className="p-6 text-center text-slate-400 text-sm">No hay renglones para mostrar.</td></tr>
+              <tr><td colSpan={canEdit ? 9 : 8} className="p-6 text-center text-slate-400 text-sm">No hay renglones para mostrar.</td></tr>
             )}
             {visibles.map((l) => {
               const pend = pendienteDe(l)
@@ -547,9 +545,6 @@ export default function PedidosPage() {
                   <td className="p-2 text-right whitespace-nowrap">
                     <span className={pend > 0 ? 'font-semibold text-amber-700' : ''}>{num(pend)}</span>
                     {cumplidoSinCerrar && <div className="text-[10px] text-emerald-600">cumplido, falta cerrar</div>}
-                  </td>
-                  <td className="p-2 min-w-[160px] text-xs">
-                    <div><EditCell value={l.personalizado || ''} canEdit={canEdit} placeholder="personalizado" onSave={(v) => updateLinea(l.id, { personalizado: v.trim() || null })} /></div>
                   </td>
                   <td className="p-2 whitespace-nowrap">
                     {l.estado === 'pendiente' && <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">Pendiente</span>}
@@ -604,13 +599,12 @@ export default function PedidosPage() {
             <div className="space-y-2 mb-3">
               {nRows.map((r, i) => (
                 <div key={i} className="grid grid-cols-12 gap-2 items-start">
-                  <div className="col-span-12 sm:col-span-4">
+                  <div className="col-span-12 sm:col-span-5">
                     <ProductPicker products={products} value={r.product_id} onPick={(id) => updateNRow(i, { product_id: id })} />
                   </div>
-                  <input list="clientes-lista" placeholder="Cliente / Obs. (o STOCK)" value={r.cliente} onChange={(e) => updateNRow(i, { cliente: e.target.value })} className="col-span-7 sm:col-span-3 border border-slate-300 rounded-md px-2 py-1.5 text-sm" />
-                  <input placeholder="Cant." inputMode="decimal" value={r.cantidad} onChange={(e) => updateNRow(i, { cantidad: e.target.value })} className="col-span-5 sm:col-span-2 border border-slate-300 rounded-md px-2 py-1.5 text-sm text-right" />
-                  <input placeholder="Personalizado" value={r.personalizado} onChange={(e) => updateNRow(i, { personalizado: e.target.value })} className="col-span-8 sm:col-span-2 border border-slate-300 rounded-md px-2 py-1.5 text-sm" />
-                  <button onClick={() => setNRows((prev) => (prev.length > 1 ? prev.filter((_, ri) => ri !== i) : prev))} className="col-span-4 sm:col-span-1 text-xs text-red-500 hover:underline text-left sm:text-center pt-2">Quitar</button>
+                  <input list="clientes-lista" placeholder="Cliente / Obs. (o STOCK)" value={r.cliente} onChange={(e) => updateNRow(i, { cliente: e.target.value })} className="col-span-8 sm:col-span-4 border border-slate-300 rounded-md px-2 py-1.5 text-sm" />
+                  <input placeholder="Cant." inputMode="decimal" value={r.cantidad} onChange={(e) => updateNRow(i, { cantidad: e.target.value })} className="col-span-4 sm:col-span-2 border border-slate-300 rounded-md px-2 py-1.5 text-sm text-right" />
+                  <button onClick={() => setNRows((prev) => (prev.length > 1 ? prev.filter((_, ri) => ri !== i) : prev))} className="col-span-12 sm:col-span-1 text-xs text-red-500 hover:underline text-left sm:text-center pt-2">Quitar</button>
                 </div>
               ))}
               <datalist id="clientes-lista">
