@@ -109,7 +109,7 @@ function normalizar(t: string) {
 
 // Buscador de producto: se va escribiendo y filtra por cualquier palabra del código o del nombre
 function ProductPicker({
-  products, value, onPick, onClose, autoFocus, allowEmpty,
+  products, value, onPick, onClose, autoFocus, allowEmpty, reventa, textValue,
 }: {
   products: { id: string; code: string; name: string }[]
   value: string
@@ -117,6 +117,8 @@ function ProductPicker({
   onClose?: () => void
   autoFocus?: boolean
   allowEmpty?: boolean
+  reventa?: string[]      // productos de reventa ya cargados antes (no están en el catálogo)
+  textValue?: string      // producto de reventa elegido (cuando no hay producto del catálogo)
 }) {
   const selected = products.find((p) => p.id === value)
   const [query, setQuery] = useState('')
@@ -130,6 +132,16 @@ function ProductPicker({
     })
     .slice(0, 40)
 
+  // Productos de reventa (texto libre, no van al catálogo de producción)
+  const reventaFiltrados = (reventa || []).filter((t) => {
+    const n = normalizar(t)
+    return palabras.every((w) => n.includes(w))
+  }).slice(0, 10)
+  const escrito = query.trim()
+  const yaExisteExacto = (reventa || []).some((t) => normalizar(t) === normalizar(escrito)) ||
+    products.some((p) => normalizar(p.name) === normalizar(escrito))
+  const puedeCrearTexto = escrito.length > 0 && !yaExisteExacto
+
   function elegir(id: string) {
     setQuery(''); setOpen(false)
     onPick(id)
@@ -139,13 +151,18 @@ function ProductPicker({
     <div className="relative">
       <input
         autoFocus={autoFocus}
-        value={open ? query : (selected ? `${selected.code} · ${selected.name}` : '')}
+        value={open ? query : (selected ? `${selected.code} · ${selected.name}` : (textValue || ''))}
         placeholder="Escribí para buscar producto..."
         onFocus={() => { setOpen(true); setQuery('') }}
         onChange={(e) => { setQuery(e.target.value); setOpen(true) }}
         onBlur={() => { setOpen(false); setQuery(''); if (onClose) onClose() }}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && filtrados.length > 0) { e.preventDefault(); elegir(filtrados[0].id) }
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            if (filtrados.length > 0) elegir(filtrados[0].id)
+            else if (reventaFiltrados.length > 0) elegir('txt:' + reventaFiltrados[0])
+            else if (puedeCrearTexto) elegir('txt:' + escrito)
+          }
           if (e.key === 'Escape') (e.target as HTMLInputElement).blur()
         }}
         className="w-full border border-slate-300 rounded-md px-2 py-1.5 text-sm"
@@ -155,13 +172,27 @@ function ProductPicker({
           {allowEmpty && (
             <div onMouseDown={(e) => { e.preventDefault(); elegir('') }} className="px-2 py-1.5 text-xs text-slate-400 hover:bg-slate-50 cursor-pointer">(sin vincular)</div>
           )}
-          {filtrados.length === 0 && <div className="px-2 py-1.5 text-xs text-slate-400">No hay coincidencias. Si el producto no existe, crealo en Catálogo de Productos.</div>}
+          {filtrados.length === 0 && reventaFiltrados.length === 0 && !puedeCrearTexto && (
+            <div className="px-2 py-1.5 text-xs text-slate-400">Escribí el nombre del producto.</div>
+          )}
           {filtrados.map((p) => (
             <div key={p.id} onMouseDown={(e) => { e.preventDefault(); elegir(p.id) }}
               className="px-2 py-1.5 text-sm hover:bg-blue-50 cursor-pointer">
               <span className="text-slate-400 mr-1">{p.code}</span>{p.name}
             </div>
           ))}
+          {reventaFiltrados.map((t) => (
+            <div key={'rv-' + t} onMouseDown={(e) => { e.preventDefault(); elegir('txt:' + t) }}
+              className="px-2 py-1.5 text-sm hover:bg-blue-50 cursor-pointer">
+              {t}<span className="ml-2 text-[10px] text-slate-400 border border-slate-200 rounded px-1">reventa</span>
+            </div>
+          ))}
+          {puedeCrearTexto && (
+            <div onMouseDown={(e) => { e.preventDefault(); elegir('txt:' + escrito) }}
+              className="px-2 py-1.5 text-sm text-blue-700 hover:bg-blue-50 cursor-pointer border-t border-slate-100">
+              + Usar «{escrito}» como producto de reventa <span className="text-[10px] text-slate-400">(no va al catálogo)</span>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -170,13 +201,15 @@ function ProductPicker({
 
 // Celda de producto en la tabla: click y se escribe para buscar
 function ProductCell({
-  products, value, canEdit, display, onSave,
+  products, value, canEdit, display, onSave, reventa, textValue,
 }: {
   products: { id: string; code: string; name: string }[]
   value: string
   canEdit: boolean
   display: ReactNode
   onSave: (id: string) => void
+  reventa?: string[]
+  textValue?: string
 }) {
   const [editing, setEditing] = useState(false)
   if (!canEdit) return <span>{display}</span>
@@ -185,15 +218,15 @@ function ProductCell({
   }
   return (
     <ProductPicker
-      products={products} value={value} autoFocus allowEmpty
+      products={products} value={value} autoFocus allowEmpty reventa={reventa} textValue={textValue}
       onPick={(id) => { setEditing(false); if (id !== value) onSave(id) }}
       onClose={() => setEditing(false)}
     />
   )
 }
 
-type NewRow = { product_id: string; cantidad: string; cliente: string }
-const emptyRow = (): NewRow => ({ product_id: '', cantidad: '', cliente: '' })
+type NewRow = { product_id: string; texto: string; cantidad: string; cliente: string }
+const emptyRow = (): NewRow => ({ product_id: '', texto: '', cantidad: '', cliente: '' })
 
 export default function PedidosPage() {
   const { role } = useAuth()
@@ -251,6 +284,17 @@ export default function PedidosPage() {
     const p = l.product_id ? productsById[l.product_id] : null
     return p ? p.code : ''
   }
+  // Productos de reventa ya usados en pedidos (sin producto del catálogo): se ofrecen al escribir
+  const reventaNombres = useMemo(() => {
+    const vistos = new Set<string>()
+    const out: string[] = []
+    lineas.forEach((l) => {
+      const t = (l.producto_texto || '').trim()
+      if (!l.product_id && t && !vistos.has(normalizar(t))) { vistos.add(normalizar(t)); out.push(t) }
+    })
+    return out.sort((a, b) => a.localeCompare(b))
+  }, [lineas])
+
   function pendienteDe(l: any) {
     return l.estado === 'pendiente' ? Math.max(Number(l.cantidad) - Number(l.cantidad_cumplida), 0) : 0
   }
@@ -268,6 +312,7 @@ export default function PedidosPage() {
   }
 
   function saveProducto(l: any, productId: string) {
+    if (productId.startsWith('txt:')) { updateLinea(l.id, { product_id: null, producto_texto: productId.slice(4).trim() }); return }
     if (!productId) { updateLinea(l.id, { product_id: null }); return }
     const p = productsById[productId]
     updateLinea(l.id, { product_id: productId, producto_texto: p ? p.name : l.producto_texto })
@@ -303,15 +348,16 @@ export default function PedidosPage() {
   }
 
   async function guardarNuevo() {
-    const validas = nRows.filter((r) => r.product_id && parseFloat(r.cantidad.replace(',', '.')) > 0)
+    const tieneProd = (r: NewRow) => !!(r.product_id || r.texto.trim())
+    const validas = nRows.filter((r) => tieneProd(r) && parseFloat(r.cantidad.replace(',', '.')) > 0)
     if (validas.length === 0) { alert('Cargá al menos un producto con su cantidad.'); return }
-    if (nRows.some((r) => (r.product_id && !(parseFloat(r.cantidad.replace(',', '.')) > 0)) || (!r.product_id && r.cantidad))) {
+    if (nRows.some((r) => (tieneProd(r) && !(parseFloat(r.cantidad.replace(',', '.')) > 0)) || (!tieneProd(r) && r.cantidad))) {
       alert('Hay renglones incompletos: cada uno necesita producto y cantidad.'); return
     }
     setSaving(true)
     const payload = validas.map((r) => ({
       fecha: nFecha, sucursal: nSucursal, nro_pedido: nNro.trim() || null, cliente: r.cliente.trim() || null,
-      product_id: r.product_id, producto_texto: productsById[r.product_id]?.name || null,
+      product_id: r.product_id || null, producto_texto: r.product_id ? (productsById[r.product_id]?.name || null) : r.texto.trim(),
       cantidad: parseFloat(r.cantidad.replace(',', '.')),
       estado: 'pendiente', cantidad_cumplida: 0,
     }))
@@ -528,8 +574,8 @@ export default function PedidosPage() {
                   </td>
                   <td className="p-2 min-w-[240px]">
                     <ProductCell
-                      products={products} value={l.product_id || ''} canEdit={canEdit}
-                      display={<>{productoCodigo(l) ? <span className="text-slate-400 mr-1">{productoCodigo(l)}</span> : null}{productoNombre(l)}{!l.product_id ? <span className="ml-1 text-[10px] text-amber-600">sin vincular</span> : null}</>}
+                      products={products} value={l.product_id || ''} canEdit={canEdit} reventa={reventaNombres} textValue={l.producto_texto || ''}
+                      display={<>{productoCodigo(l) ? <span className="text-slate-400 mr-1">{productoCodigo(l)}</span> : null}{productoNombre(l)}{!l.product_id ? <span className="ml-1 text-[10px] text-slate-400 border border-slate-200 rounded px-1">reventa</span> : null}</>}
                       onSave={(v) => saveProducto(l, v)}
                     />
                   </td>
@@ -600,7 +646,8 @@ export default function PedidosPage() {
               {nRows.map((r, i) => (
                 <div key={i} className="grid grid-cols-12 gap-2 items-start">
                   <div className="col-span-12 sm:col-span-5">
-                    <ProductPicker products={products} value={r.product_id} onPick={(id) => updateNRow(i, { product_id: id })} />
+                    <ProductPicker products={products} value={r.product_id} textValue={r.texto} reventa={reventaNombres}
+                      onPick={(id) => (id.startsWith('txt:') ? updateNRow(i, { product_id: '', texto: id.slice(4).trim() }) : updateNRow(i, { product_id: id, texto: '' }))} />
                   </div>
                   <input list="clientes-lista" placeholder="Cliente / Obs. (o STOCK)" value={r.cliente} onChange={(e) => updateNRow(i, { cliente: e.target.value })} className="col-span-8 sm:col-span-4 border border-slate-300 rounded-md px-2 py-1.5 text-sm" />
                   <input placeholder="Cant." inputMode="decimal" value={r.cantidad} onChange={(e) => updateNRow(i, { cantidad: e.target.value })} className="col-span-4 sm:col-span-2 border border-slate-300 rounded-md px-2 py-1.5 text-sm text-right" />
@@ -613,7 +660,7 @@ export default function PedidosPage() {
               </datalist>
             </div>
             <button onClick={() => setNRows((prev) => [...prev, emptyRow()])} className="text-xs text-blue-600 hover:underline mb-1">+ Agregar otro producto</button>
-            <p className="text-[11px] text-slate-400 mb-4">Si el producto no aparece en la lista, primero hay que crearlo en Catálogo de Productos.</p>
+            <p className="text-[11px] text-slate-400 mb-4">Si es un producto de reventa (no se fabrica), escribí el nombre y elegí «Usar … como producto de reventa». No hace falta crearlo en el Catálogo.</p>
 
             <div className="flex gap-2">
               <button onClick={guardarNuevo} disabled={saving} className="flex-1 bg-blue-600 text-white rounded-md py-2 text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
