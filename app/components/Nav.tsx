@@ -47,6 +47,7 @@ const groups = [
 
 const standalone = [
   { href: '/dashboard', label: 'Dashboard', roles: ['perfil_1', 'perfil_3'] },
+    { href: '/caja', label: 'Caja y Chatarra', roles: ['perfil_1'] },
 ]
 
 export default function Nav() {
