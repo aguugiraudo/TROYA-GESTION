@@ -650,15 +650,12 @@ export default function PedidosPage() {
                     <EditCell value={String(l.cantidad)} type="number" align="right" canEdit={canEdit} display={num(l.cantidad)} onSave={(v) => saveNumero(l, 'cantidad', v)} />
                   </td>
                   <td className="p-2 text-right">
-                    <button onClick={() => abrirEntregas(l)} title="Ver o agregar entregas" className="text-right hover:underline decoration-dotted decoration-slate-400 cursor-pointer">
+                    <button onClick={() => abrirEntregas(l)} title="Ver o agregar entregas" className="text-right underline decoration-dotted decoration-slate-400 underline-offset-4 hover:text-blue-600 hover:decoration-blue-600 cursor-pointer">
                       <span className="font-medium">{num(l.cantidad_cumplida)}</span>
                       {(entregasPorLinea[l.id] || []).length > 1 && (
                         <span className="block text-[10px] text-slate-400 font-normal max-w-[140px] truncate">
                           {(entregasPorLinea[l.id] || []).map((e) => num(e.cantidad)).join(' + ')}
                         </span>
-                      )}
-                      {canEdit && l.estado === 'pendiente' && Number(l.cantidad_cumplida) < Number(l.cantidad) && (
-                        <span className="block text-[10px] text-blue-600 font-normal">+ entrega</span>
                       )}
                     </button>
                   </td>
