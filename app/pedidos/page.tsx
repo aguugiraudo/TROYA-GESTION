@@ -233,6 +233,11 @@ export default function PedidosPage() {
   const canEdit = role === 'perfil_1'
 
   const [lineas, setLineas] = useState<any[]>([])
+  const [entregas, setEntregas] = useState<any[]>([])
+  const [entregasLinea, setEntregasLinea] = useState<string | null>(null)
+  const [eFecha, setEFecha] = useState(today())
+  const [eCant, setECant] = useState('')
+  const [eNota, setENota] = useState('')
   const [products, setProducts] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -267,6 +272,18 @@ export default function PedidosPage() {
       if (!data || data.length < 1000) break
     }
     setLineas(all)
+
+    let ents: any[] = []
+    for (let page = 0; page < 60; page++) {
+      const { data, error } = await supabase
+        .from('pedido_entregas').select('*')
+        .order('fecha', { ascending: true }).order('created_at', { ascending: true })
+        .range(page * 1000, page * 1000 + 999)
+      if (error) { alert('No se pudieron cargar las entregas (¿corriste el SQL pedido_entregas.sql?): ' + error.message); break }
+      ents = ents.concat(data || [])
+      if (!data || data.length < 1000) break
+    }
+    setEntregas(ents)
     setLoading(false)
   }
 
@@ -309,6 +326,53 @@ export default function PedidosPage() {
     const n = parseFloat(v.replace(',', '.'))
     if (isNaN(n) || n < 0) { alert('Ingresá un número válido (0 o más).'); return }
     updateLinea(l.id, { [campo]: n })
+  }
+
+  const entregasPorLinea = useMemo(() => {
+    const m: Record<string, any[]> = {}
+    entregas.forEach((e) => { (m[e.linea_id] = m[e.linea_id] || []).push(e) })
+    return m
+  }, [entregas])
+
+  // Recarga solo los datos de un renglón (el total "cumplida" lo suma la base de datos)
+  async function refrescarLinea(id: string) {
+    const [{ data: l }, { data: es }] = await Promise.all([
+      supabase.from('pedido_lineas').select('*').eq('id', id).single(),
+      supabase.from('pedido_entregas').select('*').eq('linea_id', id).order('fecha', { ascending: true }).order('created_at', { ascending: true }),
+    ])
+    if (l) setLineas((prev) => prev.map((x) => (x.id === id ? l : x)))
+    setEntregas((prev) => prev.filter((e) => e.linea_id !== id).concat(es || []))
+  }
+
+  function abrirEntregas(l: any) {
+    setEntregasLinea(l.id)
+    setEFecha(today())
+    setECant(String(pendienteDe(l) > 0 ? pendienteDe(l) : ''))
+    setENota('')
+  }
+
+  async function agregarEntrega(l: any) {
+    const n = parseFloat(eCant.replace(',', '.'))
+    if (isNaN(n) || n <= 0) { alert('Ingresá la cantidad entregada (mayor a 0).'); return }
+    const pend = Math.max(Number(l.cantidad) - Number(l.cantidad_cumplida), 0)
+    if (n > pend && !confirm(`Estás entregando ${num(n)} pero faltaban ${num(pend)}. ¿Cargarlo igual?`)) return
+    const { error } = await supabase.from('pedido_entregas').insert({ linea_id: l.id, fecha: eFecha || today(), cantidad: n, nota: eNota.trim() || null })
+    if (error) { alert('No se pudo guardar la entrega: ' + error.message); return }
+    await refrescarLinea(l.id)
+    setECant(''); setENota('')
+  }
+
+  async function editarEntrega(e: any, patch: Record<string, any>) {
+    const { error } = await supabase.from('pedido_entregas').update(patch).eq('id', e.id)
+    if (error) { alert('No se pudo guardar el cambio: ' + error.message); return }
+    await refrescarLinea(e.linea_id)
+  }
+
+  async function borrarEntrega(e: any) {
+    if (!confirm(`¿Borrar la entrega de ${num(e.cantidad)} del ${shortDate(e.fecha)}?`)) return
+    const { error } = await supabase.from('pedido_entregas').delete().eq('id', e.id)
+    if (error) { alert('No se pudo borrar: ' + error.message); return }
+    await refrescarLinea(e.linea_id)
   }
 
   function saveProducto(l: any, productId: string) {
@@ -586,7 +650,17 @@ export default function PedidosPage() {
                     <EditCell value={String(l.cantidad)} type="number" align="right" canEdit={canEdit} display={num(l.cantidad)} onSave={(v) => saveNumero(l, 'cantidad', v)} />
                   </td>
                   <td className="p-2 text-right">
-                    <EditCell value={String(l.cantidad_cumplida)} type="number" align="right" canEdit={canEdit} display={num(l.cantidad_cumplida)} onSave={(v) => saveNumero(l, 'cantidad_cumplida', v)} />
+                    <button onClick={() => abrirEntregas(l)} title="Ver o agregar entregas" className="text-right hover:underline decoration-dotted decoration-slate-400 cursor-pointer">
+                      <span className="font-medium">{num(l.cantidad_cumplida)}</span>
+                      {(entregasPorLinea[l.id] || []).length > 1 && (
+                        <span className="block text-[10px] text-slate-400 font-normal max-w-[140px] truncate">
+                          {(entregasPorLinea[l.id] || []).map((e) => num(e.cantidad)).join(' + ')}
+                        </span>
+                      )}
+                      {canEdit && l.estado === 'pendiente' && Number(l.cantidad_cumplida) < Number(l.cantidad) && (
+                        <span className="block text-[10px] text-blue-600 font-normal">+ entrega</span>
+                      )}
+                    </button>
                   </td>
                   <td className="p-2 text-right whitespace-nowrap">
                     <span className={pend > 0 ? 'font-semibold text-amber-700' : ''}>{num(pend)}</span>
@@ -618,6 +692,76 @@ export default function PedidosPage() {
           </tbody>
         </table>
       </div>
+
+      {entregasLinea && (() => {
+        const l = lineas.find((x) => x.id === entregasLinea)
+        if (!l) return null
+        const lista = entregasPorLinea[l.id] || []
+        const pend = Math.max(Number(l.cantidad) - Number(l.cantidad_cumplida), 0)
+        const completa = Number(l.cantidad_cumplida) >= Number(l.cantidad)
+        return (
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setEntregasLinea(null)}>
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
+              <div className="flex justify-between items-start mb-1">
+                <h3 className="font-semibold text-slate-800">Entregas</h3>
+                <button onClick={() => setEntregasLinea(null)} className="text-slate-400 hover:text-slate-600 text-lg leading-none">✕</button>
+              </div>
+              <p className="text-sm text-slate-600">{productoNombre(l)}{l.cliente ? ` · ${l.cliente}` : ''}</p>
+              <p className="text-xs text-slate-400 mb-4">Pedido {l.nro_pedido || 's/n'} · {shortDate(l.fecha)}</p>
+
+              <div className="flex gap-6 mb-4 text-sm">
+                <div><div className="text-xs text-slate-400">Pedido</div><div className="font-semibold text-slate-800">{num(l.cantidad)}</div></div>
+                <div><div className="text-xs text-slate-400">Entregado</div><div className="font-semibold text-slate-800">{num(l.cantidad_cumplida)}</div></div>
+                <div><div className="text-xs text-slate-400">Falta</div><div className={`font-semibold ${pend > 0 ? 'text-amber-700' : 'text-emerald-600'}`}>{num(pend)}</div></div>
+              </div>
+
+              {lista.length === 0 ? (
+                <p className="text-sm text-slate-400 mb-4">Todavía no hay entregas registradas.</p>
+              ) : (
+                <table className="w-full text-sm border-collapse mb-4">
+                  <thead><tr className="text-left text-xs text-slate-400"><th className="py-1 pr-2 font-normal">Fecha</th><th className="py-1 pr-2 font-normal text-right">Cantidad</th><th className="py-1 pr-2 font-normal">Nota</th>{canEdit && <th></th>}</tr></thead>
+                  <tbody>
+                    {lista.map((e) => (
+                      <tr key={e.id} className="border-t border-slate-100">
+                        <td className="py-1.5 pr-2 whitespace-nowrap"><EditCell value={e.fecha} type="date" canEdit={canEdit} display={shortDate(e.fecha)} onSave={(v) => v && editarEntrega(e, { fecha: v })} /></td>
+                        <td className="py-1.5 pr-2 text-right"><EditCell value={String(e.cantidad)} type="number" align="right" canEdit={canEdit} display={num(e.cantidad)}
+                          onSave={(v) => { const n = parseFloat(v.replace(',', '.')); if (isNaN(n) || n <= 0) { alert('Ingresá una cantidad mayor a 0.'); return } editarEntrega(e, { cantidad: n }) }} /></td>
+                        <td className="py-1.5 pr-2 text-slate-500"><EditCell value={e.nota || ''} canEdit={canEdit} onSave={(v) => editarEntrega(e, { nota: v.trim() || null })} /></td>
+                        {canEdit && <td className="py-1.5 text-xs"><button onClick={() => borrarEntrega(e)} className="text-slate-400 hover:text-red-600">borrar</button></td>}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              {canEdit && l.estado === 'pendiente' && !completa && (
+                <div className="border-t border-slate-200 pt-4">
+                  <p className="text-xs font-medium text-slate-600 mb-2">Nueva entrega</p>
+                  <div className="flex flex-wrap items-end gap-2">
+                    <label className="text-xs text-slate-500">Fecha
+                      <input type="date" value={eFecha} onChange={(e) => setEFecha(e.target.value)} className="mt-1 block border border-slate-300 rounded-md px-2 py-1.5 text-sm text-slate-800" />
+                    </label>
+                    <label className="text-xs text-slate-500">Cantidad
+                      <input inputMode="decimal" value={eCant} onChange={(e) => setECant(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') agregarEntrega(l) }} className="mt-1 block w-24 border border-slate-300 rounded-md px-2 py-1.5 text-sm text-right" />
+                    </label>
+                    <label className="text-xs text-slate-500 flex-1 min-w-[120px]">Nota (opcional)
+                      <input value={eNota} onChange={(e) => setENota(e.target.value)} className="mt-1 block w-full border border-slate-300 rounded-md px-2 py-1.5 text-sm" />
+                    </label>
+                    <button onClick={() => agregarEntrega(l)} className="bg-blue-600 text-white rounded-md px-4 py-1.5 text-sm hover:bg-blue-700">Agregar</button>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-2">Ya viene con lo que falta; cambialo si enviaste menos.</p>
+                </div>
+              )}
+              {canEdit && l.estado === 'pendiente' && completa && (
+                <div className="border-t border-slate-200 pt-4 flex items-center justify-between">
+                  <span className="text-sm text-emerald-700">Pedido cumplido por completo.</span>
+                  <button onClick={() => { cerrar(l); setEntregasLinea(null) }} className="text-sm bg-emerald-600 text-white rounded-md px-4 py-1.5 hover:bg-emerald-700">Cerrar pedido</button>
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      })()}
 
       {showNew && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => !saving && setShowNew(false)}>
