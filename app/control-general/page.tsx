@@ -161,10 +161,30 @@ export default function ControlGeneralPage() {
 
   const modalRows = modalInfo ? rowsFor(modalInfo.orderId, modalInfo.sectorId) : []
 
+  // Solo se muestran los sectores/procesos por los que pasa alguna orden activa.
+  // Los procesos de terminación del inoxidable (limpieza, pulido, cierre) se agrupan bajo un solo encabezado.
+  const PROCESO_RE = /limpieza|pulid|cierre/i
+  const usados = new Set<string>(progressRows.map((r: any) => r.sector_id))
+  const visibleSectors = sectors.filter((s) => usados.has(s.id))
+  const esProceso = (s: any) => PROCESO_RE.test(s.name)
+  const nombreCorto = (n: string) => (/cierre/i.test(n) ? 'Cierre' : /limpieza/i.test(n) ? 'Limpieza' : n)
+  const procesos = visibleSectors.filter(esProceso)
+  const primerProcesoId = procesos.length > 0 ? procesos[0].id : null
+  const ultimoProcesoId = procesos.length > 0 ? procesos[procesos.length - 1].id : null
+  const bordeProceso = (s: any) => (s.id === primerProcesoId ? ' border-l border-slate-300' : '') + (s.id === ultimoProcesoId ? ' border-r border-slate-300' : '')
+  const cabecera: { key: string; sector?: any; cols: number }[] = []
+  visibleSectors.forEach((s) => {
+    if (esProceso(s)) {
+      const last = cabecera[cabecera.length - 1]
+      if (last && !last.sector) last.cols += 1
+      else cabecera.push({ key: 'grupo-proceso', cols: 1 })
+    } else cabecera.push({ key: s.id, sector: s, cols: 1 })
+  })
+
   return (
     <main className="p-8 max-w-7xl mx-auto">
       <h1 className="text-2xl font-semibold text-slate-800 mb-1">Avance de Producción</h1>
-      <p className="text-sm text-slate-500 mb-4">Estado actual de las órdenes en curso, por sector.</p>
+      <p className="text-sm text-slate-500 mb-4">Estado actual de las órdenes en curso, por sector y proceso.</p>
 
       {!canEdit && (
         <div className="mb-4 bg-amber-50 border border-amber-200 text-amber-700 text-xs rounded-md px-3 py-2">
@@ -191,14 +211,23 @@ export default function ControlGeneralPage() {
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="bg-slate-900 text-white text-left">
-                <th className="p-3 font-medium">N° OP</th>
-                <th className="p-3 font-medium min-w-[180px]">Producto</th>
-                <th className="p-3 font-medium text-center">Cantidad</th>
-                {sectors.map((s) => (
-                  <th key={s.id} className="p-3 font-medium text-center w-[110px]">{s.name}</th>
+                <th rowSpan={procesos.length > 0 ? 2 : 1} className="p-3 font-medium">N° OP</th>
+                <th rowSpan={procesos.length > 0 ? 2 : 1} className="p-3 font-medium min-w-[180px]">Producto</th>
+                <th rowSpan={procesos.length > 0 ? 2 : 1} className="p-3 font-medium text-center">Cantidad</th>
+                {cabecera.map((c) => c.sector ? (
+                  <th key={c.key} rowSpan={procesos.length > 0 ? 2 : 1} className="p-3 font-medium text-center w-[110px]">{c.sector.name}</th>
+                ) : (
+                  <th key={c.key} colSpan={c.cols} className="px-3 pt-2 pb-1 font-medium text-center text-slate-200 border-l border-r border-slate-600 border-b border-slate-700 text-xs uppercase tracking-wider">Terminación inox</th>
                 ))}
-                <th className="p-3 font-medium text-center">% Avance</th>
+                <th rowSpan={procesos.length > 0 ? 2 : 1} className="p-3 font-medium text-center">% Avance</th>
               </tr>
+              {procesos.length > 0 && (
+                <tr className="bg-slate-900 text-white">
+                  {procesos.map((s) => (
+                    <th key={s.id} className={`px-2 pb-2 pt-1 font-normal text-center text-xs text-slate-300 w-[84px]${bordeProceso(s)} border-slate-600`}>{nombreCorto(s.name)}</th>
+                  ))}
+                </tr>
+              )}
             </thead>
             <tbody>
               {orders.map((order: any) => {
@@ -211,10 +240,10 @@ export default function ControlGeneralPage() {
                     <div className="text-xs text-slate-400">{order.client_name === 'Troya' || !order.client_name ? 'Troya (stock propio)' : `Cliente: ${order.client_name}`}</div>
                   </td>
                   <td className="p-3 text-center text-slate-600">{order.lot_quantity}</td>
-                  {sectors.map((sector) => {
+                  {visibleSectors.map((sector) => {
                     const rows = rowsFor(order.id, sector.id)
                     if (rows.length === 0) {
-                      return <td key={sector.id} className="p-3 text-center text-slate-300">—</td>
+                      return <td key={sector.id} className={`${esProceso(sector) ? 'p-2 bg-slate-50/70' : 'p-3'} text-center text-slate-300${esProceso(sector) ? bordeProceso(sector) : ''}`}>—</td>
                     }
                     const totalRequired = rows.reduce((sum, r) => sum + r.quantity_required, 0)
                     const totalCompleted = rows.reduce((sum, r) => sum + r.quantity_completed, 0)
@@ -222,7 +251,7 @@ export default function ControlGeneralPage() {
                     const pill = pillClasses(totalCompleted, totalRequired)
 
                     return (
-                      <td key={sector.id} className="p-2 text-center">
+                      <td key={sector.id} className={`p-2 text-center${esProceso(sector) ? ' bg-slate-50/70' + bordeProceso(sector) : ''}`}>
                         {!hasComponents ? (
                           <div className={`inline-flex items-center justify-center rounded-full px-2 py-1 ${pill}`}>
                             <input
