@@ -12,7 +12,7 @@ const supabase = createClient(
 type Item = { id: string; label: string }
 
 // Sectores que trabajan sobre el producto armado (brasero, plancheta...) y no pieza por pieza
-const ENSAMBLE = /soldad|granall|pintur|embal/i
+const ENSAMBLE = /soldad|granall|pintur|embal|limpieza|pulid/i
 const EMBALAJE = /embal/i
 
 function normalizar(t: string) {
@@ -246,7 +246,8 @@ export default function DespiecePage() {
   const laserSector = sectors.find((s) => /l[aá]ser/i.test(s.name))
   const sectoresPieza = sectors.filter((s) => !ENSAMBLE.test(s.name))
   const sectoresEnsamble = sectors.filter((s) => ENSAMBLE.test(s.name) && !EMBALAJE.test(s.name))
-  const sectoresProducto = sectors.filter((s) => EMBALAJE.test(s.name))
+  // El producto entero (una sola línea en la orden) puede pasar por cualquiera de los sectores de armado
+  const sectoresProducto = sectors.filter((s) => ENSAMBLE.test(s.name))
 
   // Unidad de la medida = la unidad del material (m², mm, kg, etc.), tal como está cargada en Stock MP
   function unidadDe(l: any) { const m = l.material_id ? matById[l.material_id] : null; return m && m.unidad_medida ? m.unidad_medida : '' }
@@ -469,7 +470,7 @@ export default function DespiecePage() {
 
           <div className="flex flex-wrap items-center gap-3 mb-6 pb-3 border-b border-slate-200">
             <span className="text-sm font-semibold text-slate-800">{producto ? `${producto.code} · ${producto.name}` : ''}</span>
-            <span className="text-xs text-slate-400">producto terminado, una sola línea en la orden de</span>
+            <span className="text-xs text-slate-400">producto entero, una sola línea en la orden de</span>
             <Chips sectors={sectoresProducto} activos={productoSectores} canEdit={canEdit} onToggle={toggleProductoSector} nowrap />
           </div>
 

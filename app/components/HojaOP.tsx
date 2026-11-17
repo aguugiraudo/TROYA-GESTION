@@ -9,7 +9,7 @@ const supabase = createClient(
 )
 
 // Sectores que trabajan sobre el producto armado (soldadura, granallado, pintura) y sobre el producto terminado (embalaje)
-const GRUPO_RE = /soldad|granall|pintur/i
+const GRUPO_RE = /soldad|granall|pintur|limpieza|pulid/i
 const PRODUCTO_RE = /embal/i
 const MECANIZADO_RE = /mecaniz/i
 const LASER_RE = /l[aá]ser/i
@@ -93,6 +93,8 @@ export default function HojaOP({ order, onClose }: { order: any; onClose: () => 
       const { data: ss } = await supabase.from('despiece_linea_sectores').select('linea_id, sector_id').in('linea_id', ids)
       ;(ss || []).forEach((r: any) => { (lmap[r.linea_id] = lmap[r.linea_id] || []).push(r.sector_id) })
     }
+    const { data: ps } = await supabase.from('despiece_producto_sectores').select('sector_id').eq('product_id', pid)
+    const prodSec = new Set<string>((ps || []).map((r: any) => r.sector_id))
     const { data: gs } = await supabase.from('despiece_grupo_sectores').select('grupo, sector_id').eq('product_id', pid)
     const gmap: Record<string, string[]> = {}
     ;(gs || []).forEach((r: any) => { (gmap[r.sector_id] = gmap[r.sector_id] || []).push(r.grupo) })
@@ -104,16 +106,20 @@ export default function HojaOP({ order, onClose }: { order: any; onClose: () => 
     sectors.forEach((s: any) => {
       if (GRUPO_RE.test(s.name)) {
         const grupos = gmap[s.id] || []
-        if (grupos.length === 0) return
+        const productoEntero = prodSec.has(s.id)
+        if (grupos.length === 0 && !productoEntero) return
         const orden: string[] = []
         piezas.forEach((l: any) => { if (l.grupo && !orden.includes(l.grupo)) orden.push(l.grupo) })
         const ordenados = orden.filter((g) => grupos.includes(g)).concat(grupos.filter((g) => !orden.includes(g)))
+        const filas = ordenados.map((g) => ({
+          key: g, nombre: g, cantidad: cant,
+          cells: { componentes: piezas.filter((l: any) => l.grupo === g).map((l: any) => l.nombre).join(', ') },
+        }))
+        // Si el producto entero pasa por este sector, se agrega una línea con el nombre del producto
+        if (productoEntero) filas.push({ key: 'prod-' + pid, nombre: prod ? prod.name : 'Producto', cantidad: cant, cells: { componentes: '' } })
         out.push({
-          sectorId: s.id, sector: s.name, tipo: 'grupo',
-          rows: ordenados.map((g) => ({
-            key: g, nombre: g, cantidad: cant,
-            cells: { componentes: piezas.filter((l: any) => l.grupo === g).map((l: any) => l.nombre).join(', ') },
-          })),
+          sectorId: s.id, sector: s.name, tipo: grupos.length > 0 ? 'grupo' : 'producto',
+          rows: filas,
         })
       } else if (PRODUCTO_RE.test(s.name)) {
         // El embalaje sale en todas las OP (todo producto se embala)
