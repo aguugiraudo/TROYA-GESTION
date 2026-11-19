@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 
 const supabase = createClient(
@@ -156,6 +156,31 @@ export default function PlanDiarioPage() {
     return all.reduce((max, t) => (t.plan_date > max ? t.plan_date : max), all[0].plan_date)
   }
 
+  // Minutos por unidad según la PROPIA orden (minutes_required / quantity_required de su avance).
+  // Así el real y el objetivo se miden con la misma vara que el peso total de la orden y,
+  // si todo está completo, el resultado es exactamente 100%. Si no hay renglón, usa el tiempo guardado en la tarea.
+  const minPerUnitMap = useMemo(() => {
+    const exact: Record<string, { min: number; qty: number }> = {}
+    const bySector: Record<string, { min: number; qty: number }> = {}
+    progressDetailRows.forEach((r: any) => {
+      const q = Number(r.quantity_required) || 0
+      const m = Number(r.minutes_required) || 0
+      const k1 = `${r.order_id}|${r.sector_id}|${r.component_id || ''}`
+      const k2 = `${r.order_id}|${r.sector_id}`
+      exact[k1] = { min: (exact[k1]?.min || 0) + m, qty: (exact[k1]?.qty || 0) + q }
+      bySector[k2] = { min: (bySector[k2]?.min || 0) + m, qty: (bySector[k2]?.qty || 0) + q }
+    })
+    return { exact, bySector }
+  }, [progressDetailRows])
+
+  function unitMinutes(t: any) {
+    const e = minPerUnitMap.exact[`${t.order_id}|${t.sector_id}|${t.component_id || ''}`]
+    if (e && e.qty > 0) return e.min / e.qty
+    const b = minPerUnitMap.bySector[`${t.order_id}|${t.sector_id}`]
+    if (b && b.qty > 0) return b.min / b.qty
+    return t.standard_time_minutes || 0
+  }
+
   // Real acumulado (%) de una orden hasta una fecha dada (inclusive o estrictamente anterior)
   function cumulativeRealUpTo(orderId: string, date: string, inclusive: boolean) {
     const totalWeight = weightByOrder[orderId]
@@ -164,10 +189,10 @@ export default function PlanDiarioPage() {
     if (!totalWeight || relevant.length === 0) return { real: null as number | null, hasAny: false }
 
     const closed = relevant.filter((t) => t.actual_quantity != null)
-    const realMin = closed.reduce((s, t) => s + t.actual_quantity * (t.standard_time_minutes || 0), 0)
+    const realMin = closed.reduce((s, t) => s + t.actual_quantity * unitMinutes(t), 0)
 
     return {
-      real: closed.length > 0 ? Math.round((realMin / totalWeight) * 1000) / 10 : null,
+      real: closed.length > 0 ? Math.min(100, Math.round((realMin / totalWeight) * 1000) / 10) : null,
       hasAny: true,
     }
   }
@@ -188,7 +213,7 @@ export default function PlanDiarioPage() {
     const beforeToday = cumulativeRealUpTo(orderId, date, false)
     const allClosedToday = todaysTasks.every((t) => t.actual_quantity != null)
 
-    const todayTargetMin = todaysTasks.reduce((s, t) => s + t.target_quantity * (t.standard_time_minutes || 0), 0)
+    const todayTargetMin = todaysTasks.reduce((s, t) => s + t.target_quantity * unitMinutes(t), 0)
     const todayTargetPct = totalWeight ? (todayTargetMin / totalWeight) * 100 : 0
 
     const baseRealPct = beforeToday.real ?? 0
