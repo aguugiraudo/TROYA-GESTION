@@ -1,9 +1,19 @@
 'use client'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
 import { usePathname } from 'next/navigation'
 import { useAuth } from './AuthGate'
+import { createClient } from '@supabase/supabase-js'
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
+
+function isoLocal(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 
 const groups = [
   {
@@ -25,6 +35,13 @@ const groups = [
     tabs: [
       { href: '/materia-prima', label: 'Stock MP', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
       { href: '/insumos', label: 'Insumos', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
+    ],
+  },
+  {
+    key: 'mantenimiento',
+    label: 'Mantenimiento',
+    tabs: [
+      { href: '/mantenimiento', label: 'Mantenimiento preventivo', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
     ],
   },
   {
@@ -56,6 +73,36 @@ export default function Nav() {
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const [openMobileGroup, setOpenMobileGroup] = useState<string | null>(null)
   const { role, fullName, logout } = useAuth()
+  const [mant, setMant] = useState({ atrasadas: 0, semana: 0 })
+
+  // Globito de Mantenimiento: cuántos preventivos están atrasados o tocan esta semana
+  useEffect(() => {
+    if (!role || !['perfil_1', 'perfil_2', 'perfil_3'].includes(role)) return
+    let cancelled = false
+    async function cargar() {
+      const hoy = new Date()
+      const dow = hoy.getDay()
+      const domingo = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate() + (dow === 0 ? 0 : 7 - dow))
+      const { data, error } = await supabase.from('mant_tareas').select('proximo').not('proximo', 'is', null).lte('proximo', isoLocal(domingo))
+      if (cancelled || error) return
+      const t = isoLocal(hoy)
+      const rows = data || []
+      setMant({ atrasadas: rows.filter((r: any) => r.proximo < t).length, semana: rows.filter((r: any) => r.proximo >= t).length })
+    }
+    cargar()
+    return () => { cancelled = true }
+  }, [role, pathname])
+
+  function badgeFor(key: string) {
+    if (key !== 'mantenimiento') return null
+    const n = mant.atrasadas > 0 ? mant.atrasadas : mant.semana
+    if (n === 0) return null
+    return (
+      <span className={`ml-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full align-middle ${mant.atrasadas > 0 ? 'bg-rose-500 text-white' : 'bg-amber-400 text-slate-900'}`}>
+        {n}
+      </span>
+    )
+  }
 
   function visibleTabs(tabs: { href: string; label: string; roles: string[] }[]) {
     return tabs.filter((t) => role && t.roles.includes(role))
@@ -72,7 +119,7 @@ export default function Nav() {
   const activeGroup = visibleGroups.find((g) => g.tabs.some((t) => t.href === pathname)) || null
 
   return (
-    <nav className="bg-slate-900 sticky top-0 z-40">
+    <nav className="bg-slate-900 sticky top-0 z-40 print:hidden">
       <div className="flex items-center justify-between px-4 md:px-6 h-14">
         <div className="flex items-center gap-5 min-w-0">
           <Link href="/" className="shrink-0 flex items-center">
@@ -93,6 +140,7 @@ export default function Nav() {
                   }`}
                 >
                   {g.label}
+                  {badgeFor(g.key)}
                 </Link>
               )
             })}
@@ -180,7 +228,7 @@ export default function Nav() {
                 onClick={() => setOpenMobileGroup(openMobileGroup === g.key ? null : g.key)}
                 className="w-full flex items-center justify-between py-2.5 text-sm text-slate-200 font-medium"
               >
-                {g.label}
+                <span>{g.label}{badgeFor(g.key)}</span>
                 <span className={`text-[10px] transition-transform ${openMobileGroup === g.key ? 'rotate-180' : ''}`}>▾</span>
               </button>
               {openMobileGroup === g.key && (
