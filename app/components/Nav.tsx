@@ -38,13 +38,6 @@ const groups = [
     ],
   },
   {
-    key: 'mantenimiento',
-    label: 'Mantenimiento',
-    tabs: [
-      { href: '/mantenimiento', label: 'Mantenimiento preventivo', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
-    ],
-  },
-  {
     key: 'ingenieria',
     label: 'Ingeniería',
     tabs: [
@@ -63,6 +56,7 @@ const groups = [
 ]
 
 const standalone = [
+  { href: '/mantenimiento', label: 'Mantenimiento', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
   { href: '/caja', label: 'Caja y Chatarra', roles: ['perfil_1'] },
     { href: '/dashboard', label: 'Dashboard', roles: ['perfil_1', 'perfil_3'] },
 ]
@@ -140,7 +134,6 @@ export default function Nav() {
                   }`}
                 >
                   {g.label}
-                  {badgeFor(g.key)}
                 </Link>
               )
             })}
@@ -158,6 +151,7 @@ export default function Nav() {
                   }`}
                 >
                   {t.label}
+                  {t.href === '/mantenimiento' && badgeFor('mantenimiento')}
                 </Link>
               )
             })}
@@ -228,7 +222,7 @@ export default function Nav() {
                 onClick={() => setOpenMobileGroup(openMobileGroup === g.key ? null : g.key)}
                 className="w-full flex items-center justify-between py-2.5 text-sm text-slate-200 font-medium"
               >
-                <span>{g.label}{badgeFor(g.key)}</span>
+                {g.label}
                 <span className={`text-[10px] transition-transform ${openMobileGroup === g.key ? 'rotate-180' : ''}`}>▾</span>
               </button>
               {openMobileGroup === g.key && (
@@ -262,6 +256,7 @@ export default function Nav() {
                 }`}
               >
                 {t.label}
+                {t.href === '/mantenimiento' && badgeFor('mantenimiento')}
               </Link>
             )
           })}
