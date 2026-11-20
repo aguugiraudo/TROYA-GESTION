@@ -17,6 +17,17 @@ function shortDate(iso: string) {
   return iso.split('-').reverse().join('/')
 }
 
+function haceDias(iso: string) {
+  const d = Math.round((Date.now() - new Date(iso + 'T00:00:00').getTime()) / 86400000)
+  if (d <= 0) return 'hoy'
+  if (d === 1) return 'ayer'
+  return `hace ${d} días`
+}
+
+function fmtN(n: number) {
+  return new Intl.NumberFormat('es-AR', { maximumFractionDigits: 2 }).format(n)
+}
+
 function currentMonthValue() {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
@@ -27,6 +38,8 @@ type Tab = 'stock' | 'ingresos' | 'egresos' | 'inventario' | 'consumo'
 export default function InsumosPage() {
   const { role } = useAuth()
   const canEdit = role === 'perfil_1' || role === 'perfil_2'
+  // Solo el dueño marca qué se pidió (y puede cancelarlo); el resto lo ve
+  const canPedir = role === 'perfil_1'
 
   const [tab, setTab] = useState<Tab>('stock')
   const [showAyuda, setShowAyuda] = useState(false)
@@ -42,6 +55,12 @@ export default function InsumosPage() {
   const [pedirNotas, setPedirNotas] = useState('')
   const [editingSolCantidad, setEditingSolCantidad] = useState<string | null>(null)
   const [stockByItem, setStockByItem] = useState<Record<string, number>>({})
+
+  // --- Seguimiento de pedidos de compra: Falta pedir -> Pedido (en camino) -> Recibido ---
+  const [pedidos, setPedidos] = useState<any[]>([])
+  const [selReponer, setSelReponer] = useState<Record<string, string>>({})
+  const [pedidoNota, setPedidoNota] = useState('')
+  const [editingPedidoCant, setEditingPedidoCant] = useState<string | null>(null)
   const [operators, setOperators] = useState<any[]>([])
   const [movimientos, setMovimientos] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -147,6 +166,14 @@ export default function InsumosPage() {
       .eq('estado', 'pendiente')
       .order('created_at', { ascending: false })
     setSolicitudes(solData || [])
+
+    const { data: pedData } = await supabase
+      .from('insumo_pedidos')
+      .select('*')
+      .eq('estado', 'abierto')
+      .order('fecha', { ascending: true })
+      .order('created_at', { ascending: true })
+    setPedidos(pedData || [])
 
     setLoading(false)
   }
@@ -258,7 +285,7 @@ export default function InsumosPage() {
   }
 
   async function cancelarSolicitud(id: string) {
-    if (!confirm('¿Cancelar este pedido? Deja de aparecer en el Excel de compra.')) return
+    if (!confirm('¿Cancelar este pedido? Deja de aparecer en "Para reponer" y en el Excel de compra.')) return
     await supabase.from('insumo_solicitudes').delete().eq('id', id)
     fetchAll()
   }
@@ -266,6 +293,113 @@ export default function InsumosPage() {
   async function marcarSolicitudRecibida(id: string) {
     await supabase.from('insumo_solicitudes').update({ estado: 'recibida' }).eq('id', id)
     fetchAll()
+  }
+
+  // ----- Pedidos de compra (Para reponer) -----
+  function toggleSel(key: string, defVal: string) {
+    setSelReponer((prev) => {
+      const n = { ...prev }
+      if (key in n) delete n[key]
+      else n[key] = defVal
+      return n
+    })
+  }
+
+  function setSelCant(key: string, val: string) {
+    setSelReponer((prev) => ({ ...prev, [key]: val }))
+  }
+
+  function seleccionarTodoReponer() {
+    const n: Record<string, string> = {}
+    faltaPedir.forEach((f) => { n['i:' + f.item.id] = String(f.sugerida) })
+    solPorPedir.forEach((s: any) => { n['s:' + s.id] = String(s.cantidad) })
+    setSelReponer(n)
+  }
+
+  async function marcarPedidos() {
+    const keys = Object.keys(selReponer)
+    if (keys.length === 0) { alert('Tildá primero lo que ya pediste.'); return }
+    const rows: any[] = []
+    const solIds: string[] = []
+    for (const key of keys) {
+      if (key.startsWith('i:')) {
+        const cant = parseFloat((selReponer[key] || '').replace(',', '.'))
+        if (!cant || cant <= 0) { alert('Revisá las cantidades: tienen que ser mayores a 0.'); return }
+        rows.push({ insumo_id: key.slice(2), cantidad: cant, nota: pedidoNota.trim() || null, fecha: today() })
+      } else {
+        solIds.push(key.slice(2))
+      }
+    }
+    if (rows.length > 0) {
+      const { error } = await supabase.from('insumo_pedidos').insert(rows)
+      if (error) { alert('Error al marcar los pedidos: ' + error.message + ' (¿corriste el SQL de pedidos de insumos?)'); return }
+    }
+    if (solIds.length > 0) {
+      const { error } = await supabase.from('insumo_solicitudes').update({ pedido_fecha: today() }).in('id', solIds)
+      if (error) { alert('Error al marcar los pedidos a pedido: ' + error.message + ' (¿corriste el SQL de pedidos de insumos?)'); return }
+    }
+    setSelReponer({})
+    setPedidoNota('')
+    fetchAll()
+  }
+
+  async function savePedidoCantidad(id: string, value: string, recibida: number) {
+    setEditingPedidoCant(null)
+    const cant = parseFloat(value || '0')
+    if (!cant || cant <= 0) return
+    if (cant <= recibida) { alert('Ya recibiste ' + recibida + ' de este pedido: la cantidad pedida tiene que ser mayor.'); return }
+    await supabase.from('insumo_pedidos').update({ cantidad: cant }).eq('id', id)
+    fetchAll()
+  }
+
+  async function cancelarPedido(id: string) {
+    if (!confirm('¿Cancelar este pedido? Vuelve a aparecer en "Falta pedir" si el stock sigue bajo el mínimo.')) return
+    await supabase.from('insumo_pedidos').update({ estado: 'cancelado', cerrado_at: new Date().toISOString() }).eq('id', id)
+    fetchAll()
+  }
+
+  // Cuando entra mercadería, se descuenta de los pedidos abiertos de ese ítem (el más viejo primero).
+  async function aplicarRecepcion(insumoId: string, cantidad: number) {
+    const { data } = await supabase
+      .from('insumo_pedidos')
+      .select('*')
+      .eq('insumo_id', insumoId)
+      .eq('estado', 'abierto')
+      .order('fecha', { ascending: true })
+      .order('created_at', { ascending: true })
+    let resto = cantidad
+    for (const p of data || []) {
+      if (resto <= 0) break
+      const falta = Number(p.cantidad) - Number(p.recibida || 0)
+      const aplica = Math.min(falta, resto)
+      const nueva = Number(p.recibida || 0) + aplica
+      const cerrado = nueva >= Number(p.cantidad)
+      await supabase.from('insumo_pedidos')
+        .update({ recibida: nueva, ...(cerrado ? { estado: 'recibido', cerrado_at: new Date().toISOString() } : {}) })
+        .eq('id', p.id)
+      resto -= aplica
+    }
+  }
+
+  // Si se elimina un ingreso cargado por error, se devuelve esa cantidad al pedido (el más nuevo primero).
+  async function revertirRecepcion(insumoId: string, cantidad: number) {
+    const { data } = await supabase
+      .from('insumo_pedidos')
+      .select('*')
+      .eq('insumo_id', insumoId)
+      .in('estado', ['abierto', 'recibido'])
+      .gt('recibida', 0)
+      .order('fecha', { ascending: false })
+      .order('created_at', { ascending: false })
+    let resto = cantidad
+    for (const p of data || []) {
+      if (resto <= 0) break
+      const quita = Math.min(Number(p.recibida), resto)
+      await supabase.from('insumo_pedidos')
+        .update({ recibida: Number(p.recibida) - quita, estado: 'abierto', cerrado_at: null })
+        .eq('id', p.id)
+      resto -= quita
+    }
   }
 
   async function saveItemStockMinimo(id: string, value: string) {
@@ -310,6 +444,8 @@ export default function InsumosPage() {
     if (error) { alert('Error al registrar el ingreso: ' + error.message); return }
     // Si había pedidos "a pedido" pendientes de este ítem, con la llegada se dan por recibidos
     await supabase.from('insumo_solicitudes').update({ estado: 'recibida' }).eq('insumo_id', inItem.id).eq('estado', 'pendiente')
+    // Y si había un pedido de compra en camino de este ítem, se descuenta lo que llegó
+    await aplicarRecepcion(inItem.id, cantidad)
     resetIngresoForm()
     fetchAll()
   }
@@ -337,7 +473,11 @@ export default function InsumosPage() {
 
   async function deleteMovimiento(id: string) {
     if (!confirm('¿Eliminar este movimiento? El stock se recalcula solo.')) return
+    const { data: mv } = await supabase.from('insumo_movimientos').select('insumo_id, tipo, cantidad, origen').eq('id', id).single()
     await supabase.from('insumo_movimientos').delete().eq('id', id)
+    if (mv && mv.tipo === 'ingreso' && mv.origen !== 'ajuste_inventario') {
+      await revertirRecepcion(mv.insumo_id, Number(mv.cantidad))
+    }
     fetchAll()
   }
 
@@ -381,22 +521,18 @@ export default function InsumosPage() {
   // (2) los pedidos "a pedido" que alguien marcó y todavía no llegaron.
   // Se descarga como .xlsx para que el encargado se lo mande a Agustín por mail o WhatsApp.
   function descargarResumenCompra() {
-    const faltantes = items
-      .filter((it) => !it.a_pedido)
-      .map((it) => ({ item: it, stock: stockByItem[it.id] || 0 }))
-      .filter(({ item, stock }) => stock < item.stock_minimo)
-
-    if (faltantes.length === 0 && solicitudes.length === 0) {
-      alert('No hay ningún ítem por debajo del stock mínimo ni pedidos a pedido pendientes — no hace falta pedir nada.')
+    // Solo lo que todavía falta pedir (lo ya pedido y en camino no se vuelve a pedir)
+    if (faltaPedir.length === 0 && solPorPedir.length === 0) {
+      alert('No hay nada para pedir: todo está sobre el stock mínimo o ya fue pedido.')
       return
     }
 
     const header = ['C\u00F3digo', 'Art\u00EDculo', 'Stock m\u00EDnimo', 'Stock actual', 'Cantidad a pedir', 'Motivo']
-    const rowsMinimo = faltantes.map(({ item, stock }) => [
+    const rowsMinimo = faltaPedir.map(({ item, stock, sugerida, enCamino }) => [
       item.codigo || '', item.nombre, item.stock_minimo, stock,
-      Math.ceil(item.stock_minimo - stock), 'Bajo stock m\u00EDnimo',
+      sugerida, enCamino > 0 ? `Bajo stock m\u00EDnimo (ya hay ${enCamino} pedidos en camino)` : 'Bajo stock m\u00EDnimo',
     ])
-    const rowsAPedido = solicitudes.map((s: any) => [
+    const rowsAPedido = solPorPedir.map((s: any) => [
       s.insumos?.codigo || '', s.insumos?.nombre || '', 'A pedido', stockByItem[s.insumo_id] || 0,
       Number(s.cantidad),
       `Pedido por ${s.operators?.full_name || '\u2014'} el ${s.fecha.split('-').reverse().join('/')}${s.notas ? ` \u2014 ${s.notas}` : ''}`,
@@ -408,8 +544,32 @@ export default function InsumosPage() {
     XLSX.writeFile(wb, `compra_insumos_${today()}.xlsx`)
   }
 
+  // Solicitudes de ítems "a pedido": sin pedido_fecha = falta pedir; con pedido_fecha = ya pedido, en camino
+  const solPorPedir = solicitudes.filter((s: any) => !s.pedido_fecha)
+  const solEnCamino = solicitudes.filter((s: any) => !!s.pedido_fecha)
   const pendientesPorItem: Record<string, number> = {}
-  solicitudes.forEach((s: any) => { pendientesPorItem[s.insumo_id] = (pendientesPorItem[s.insumo_id] || 0) + 1 })
+  solPorPedir.forEach((s: any) => { pendientesPorItem[s.insumo_id] = (pendientesPorItem[s.insumo_id] || 0) + 1 })
+  const enCaminoSolPorItem: Record<string, number> = {}
+  solEnCamino.forEach((s: any) => { enCaminoSolPorItem[s.insumo_id] = (enCaminoSolPorItem[s.insumo_id] || 0) + 1 })
+
+  // Pedidos de compra abiertos: cuánto falta recibir por ítem y desde cuándo
+  const enCaminoPorItem: Record<string, number> = {}
+  const primerPedidoPorItem: Record<string, string> = {}
+  pedidos.forEach((p: any) => {
+    const falta = Number(p.cantidad) - Number(p.recibida || 0)
+    if (falta <= 0) return
+    enCaminoPorItem[p.insumo_id] = (enCaminoPorItem[p.insumo_id] || 0) + falta
+    if (!primerPedidoPorItem[p.insumo_id] || p.fecha < primerPedidoPorItem[p.insumo_id]) primerPedidoPorItem[p.insumo_id] = p.fecha
+  })
+  const itemById: Record<string, any> = {}
+  items.forEach((it) => { itemById[it.id] = it })
+
+  // Falta pedir: bajo el mínimo y lo que ya viene en camino no alcanza para llegar al mínimo
+  const faltaPedir = items
+    .filter((it) => !it.a_pedido)
+    .map((it) => ({ item: it, stock: stockByItem[it.id] || 0, enCamino: enCaminoPorItem[it.id] || 0 }))
+    .filter(({ item, stock, enCamino }) => stock + enCamino < item.stock_minimo)
+    .map((x) => ({ ...x, sugerida: Math.ceil(x.item.stock_minimo - x.stock - x.enCamino) }))
 
   const itemsByCategoria: Record<string, any[]> = {}
   const sinCategoria: any[] = []
@@ -461,8 +621,26 @@ export default function InsumosPage() {
                   'El último día del mes, entrá a la pestaña Inventario.',
                   'Contá a mano lo que hay realmente en el pañol de cada ítem, y escribilo en la columna "Contado" de cada fila.',
                   'Apretá "Guardar todos los conteos" — el sistema corrige el stock solo, no hace falta calcular nada.',
-                  'Apretá "⬇ Descargar resumen de compra" — baja un Excel con SOLO los ítems que quedaron por debajo del mínimo (código, artículo, mínimo, actual, cuánto pedir). Si todo está bien, avisa que no hace falta pedir nada.',
-                  'Mandale ese Excel a Agustín por WhatsApp o mail.',
+                  'Volvé a Stock: arriba aparece el recuadro "Para reponer", con SOLO los ítems que quedaron por debajo del mínimo y todavía nadie pidió (con la cantidad sugerida). Si todo está bien, dice que no hay nada para pedir.',
+                  'Avisale a Agustín. Él ve el mismo recuadro, hace las órdenes de compra y marca lo que pidió (ver "Pedidos de compra", más abajo). Si prefiere el Excel, tiene el botón "Descargar Excel" en ese recuadro.',
+                ].map((texto, i) => (
+                  <li key={i} className="flex gap-3">
+                    <span className="shrink-0 w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center">{i + 1}</span>
+                    <span className="pt-0.5">{texto}</span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+
+            <div>
+              <p className="font-semibold text-slate-800 mb-2">Pedidos de compra — ¿qué se pidió y qué falta que llegue?</p>
+              <ol className="space-y-2">
+                {[
+                  'Cada ítem que hay que reponer pasa por tres estados: "Falta pedir" (rojo: está bajo el mínimo y nadie lo pidió) → "Pedido" (azul: Agustín ya hizo la orden de compra) → recibido (desaparece de la lista).',
+                  'Si algo no llegó y figura "Pedido · 50 u. · hace 6 días", ya está pedido: no hace falta avisarle a Agustín de nuevo, solo esperar que llegue.',
+                  'Agustín, después de armar las órdenes de compra, vuelve a "Para reponer", tilda lo que pidió (puede ajustar la cantidad y anotar el proveedor o el número de orden) y toca "Marcar como pedidos". Solo él puede marcarlos, cambiar la cantidad o cancelarlos.',
+                  'Cuando llega la mercadería, el encargado la carga en Ingresos como siempre. El sistema la descuenta solo del pedido: si llegan 30 de 50 queda "Faltan 20 de 50", y si llega todo el pedido se cierra solo.',
+                  'Un ítem ya pedido no vuelve a salir en "Falta pedir" ni en el Excel. Si lo pedido no alcanza para llegar al mínimo, vuelve a aparecer con lo que todavía falta.',
                 ].map((texto, i) => (
                   <li key={i} className="flex gap-3">
                     <span className="shrink-0 w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center">{i + 1}</span>
@@ -478,8 +656,8 @@ export default function InsumosPage() {
                 {[
                   'En Stock, debajo del stock mínimo de ese ítem, tocá "marcar a pedido". Deja de avisar "stock bajo" y pasa a decir "A pedido".',
                   'Cuando alguien necesite uno, tocá "Pedir" en la fila de ese ítem: elegí quién lo pide, la cantidad y, si querés, una nota (modelo, máquina).',
-                  'El pedido queda en el recuadro amarillo de arriba y sale en el Excel de "Descargar resumen de compra", junto con lo que está bajo mínimo.',
-                  'Cuando llegue, cargalo en Ingresos: el pedido se da por recibido solo. También podés tocar "Recibido" o "Cancelar" a mano.',
+                  'El pedido aparece en "Para reponer" como "A pedido" (Falta pedir) y en el Excel. Cuando Agustín lo marca como pedido, pasa a "Pedidos en camino".',
+                  'Cuando llegue, cargalo en Ingresos: el pedido se da por recibido solo. Agustín también puede cancelarlo a mano.',
                 ].map((texto, i) => (
                   <li key={i} className="flex gap-3">
                     <span className="shrink-0 w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center">{i + 1}</span>
@@ -570,41 +748,172 @@ export default function InsumosPage() {
             </div>
           )}
 
-          {solicitudes.length > 0 && (
-            <div className="bg-amber-50 border border-amber-200 rounded-xl shadow-sm p-4 mb-6">
-              <p className="text-xs font-bold text-amber-800 uppercase tracking-wide mb-1">Pedidos a pedido pendientes ({solicitudes.length})</p>
-              <p className="text-xs text-amber-700 mb-3">Aparecen en el Excel de "Descargar resumen de compra". Se dan por recibidos solos cuando cargás el Ingreso de ese ítem.</p>
-              <div className="space-y-2">
-                {solicitudes.map((s: any) => (
-                  <div key={s.id} className="flex items-center justify-between gap-3 bg-white rounded-lg px-3 py-2 text-sm flex-wrap">
-                    <div className="min-w-0">
-                      <p className="font-medium text-slate-700">{s.insumos?.nombre}</p>
-                      <p className="text-xs text-slate-400">
-                        Pidió {s.operators?.full_name || '—'} el {s.fecha.split('-').reverse().join('/')}{s.notas ? ` — ${s.notas}` : ''}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-3 shrink-0">
-                      {canEdit && editingSolCantidad === s.id ? (
-                        <input type="number" autoFocus defaultValue={s.cantidad}
-                          onBlur={(e) => saveSolicitudCantidad(s.id, e.target.value)}
-                          onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
-                          className="w-16 text-center rounded-md border border-blue-300 py-0.5 text-xs" />
-                      ) : (
-                        <button onClick={() => canEdit && setEditingSolCantidad(s.id)} disabled={!canEdit}
-                          className={`text-slate-700 font-semibold ${canEdit ? 'hover:underline decoration-dotted' : ''}`}>
-                          {s.cantidad} {s.insumos?.unidad_medida}
-                        </button>
-                      )}
-                      {canEdit && (
-                        <>
-                          <button onClick={() => marcarSolicitudRecibida(s.id)} className="text-xs text-emerald-600 hover:underline">Recibido</button>
-                          <button onClick={() => cancelarSolicitud(s.id)} className="text-xs text-rose-500 hover:underline">Cancelar</button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                ))}
+          {items.length > 0 && (
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm mb-6 overflow-hidden">
+              <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-2 flex-wrap">
+                <div>
+                  <h2 className="font-semibold text-slate-700 text-sm">Para reponer</h2>
+                  <p className="text-xs text-slate-400">Lo que falta pedir y lo que ya se pidió y está en camino.</p>
+                </div>
+                {canEdit && (faltaPedir.length > 0 || solPorPedir.length > 0) && (
+                  <button onClick={descargarResumenCompra} className="text-xs border border-slate-300 text-slate-600 px-3 py-1.5 rounded-md hover:bg-slate-50">
+                    ⬇ Descargar Excel
+                  </button>
+                )}
               </div>
+
+              {faltaPedir.length === 0 && solPorPedir.length === 0 && pedidos.length === 0 && solEnCamino.length === 0 && (
+                <p className="px-4 py-4 text-sm text-emerald-700">Todo en orden: no hay nada para pedir ni pedidos pendientes de recibir.</p>
+              )}
+
+              {(faltaPedir.length > 0 || solPorPedir.length > 0) && (
+                <div className="px-4 py-3">
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <p className="text-xs font-bold text-rose-700 uppercase tracking-wide">Falta pedir ({faltaPedir.length + solPorPedir.length})</p>
+                    {canPedir && (
+                      <button onClick={seleccionarTodoReponer} className="text-xs text-blue-600 hover:underline">Tildar todo</button>
+                    )}
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    {faltaPedir.map(({ item, stock, enCamino, sugerida }) => {
+                      const key = 'i:' + item.id
+                      const sel = key in selReponer
+                      return (
+                        <div key={key} className="py-2 flex items-center gap-3 flex-wrap">
+                          {canPedir && (
+                            <input type="checkbox" checked={sel} onChange={() => toggleSel(key, String(sugerida))} className="w-4 h-4 shrink-0" aria-label={'Tildar ' + item.nombre} />
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-medium text-slate-700 truncate">{item.nombre}{item.codigo && <span className="text-xs text-slate-400 font-normal"> ({item.codigo})</span>}</p>
+                            <p className="text-xs text-slate-400">
+                              Stock {fmtN(stock)} · mínimo {fmtN(item.stock_minimo)} {item.unidad_medida}
+                              {enCamino > 0 && ` · ya hay ${fmtN(enCamino)} en camino`}
+                            </p>
+                          </div>
+                          <div className="shrink-0 text-sm text-slate-600">
+                            {canPedir && sel ? (
+                              <span className="inline-flex items-center gap-1">
+                                <input type="number" value={selReponer[key]} onChange={(e) => setSelCant(key, e.target.value)}
+                                  className="w-20 text-center rounded-md border border-blue-300 py-1 text-sm" />
+                                <span className="text-xs text-slate-400">{item.unidad_medida}</span>
+                              </span>
+                            ) : (
+                              <>Pedir <strong>{fmtN(sugerida)}</strong> {item.unidad_medida}</>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
+                    {solPorPedir.map((s: any) => {
+                      const key = 's:' + s.id
+                      const sel = key in selReponer
+                      return (
+                        <div key={key} className="py-2 flex items-center gap-3 flex-wrap">
+                          {canPedir && (
+                            <input type="checkbox" checked={sel} onChange={() => toggleSel(key, String(s.cantidad))} className="w-4 h-4 shrink-0" aria-label={'Tildar ' + (s.insumos?.nombre || '')} />
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-medium text-slate-700 truncate">
+                              {s.insumos?.nombre}
+                              <span className="ml-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 align-middle">A pedido</span>
+                            </p>
+                            <p className="text-xs text-slate-400">
+                              Pidió {s.operators?.full_name || '—'} el {s.fecha.split('-').reverse().join('/')}{s.notas ? ` — ${s.notas}` : ''}
+                            </p>
+                          </div>
+                          <div className="shrink-0 flex items-center gap-3 text-sm text-slate-600">
+                            {canEdit && editingSolCantidad === s.id ? (
+                              <input type="number" autoFocus defaultValue={s.cantidad}
+                                onBlur={(e) => saveSolicitudCantidad(s.id, e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                                className="w-16 text-center rounded-md border border-blue-300 py-0.5 text-xs" />
+                            ) : (
+                              <button onClick={() => canEdit && setEditingSolCantidad(s.id)} disabled={!canEdit}
+                                className={`font-semibold ${canEdit ? 'hover:underline decoration-dotted' : ''}`}>
+                                {s.cantidad} {s.insumos?.unidad_medida}
+                              </button>
+                            )}
+                            {canEdit && <button onClick={() => cancelarSolicitud(s.id)} className="text-xs text-rose-500 hover:underline">Cancelar</button>}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  {canPedir && (
+                    <div className="mt-3 pt-3 border-t border-slate-100 flex items-center gap-2 flex-wrap">
+                      <input
+                        placeholder="Proveedor u orden de compra (opcional)"
+                        value={pedidoNota}
+                        onChange={(e) => setPedidoNota(e.target.value)}
+                        className="border border-slate-300 rounded-md px-2 py-1.5 text-sm flex-1 min-w-[200px]"
+                      />
+                      <button
+                        onClick={marcarPedidos}
+                        disabled={Object.keys(selReponer).length === 0}
+                        className="bg-blue-600 text-white px-4 py-1.5 rounded-md text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        Marcar como pedidos{Object.keys(selReponer).length > 0 ? ` (${Object.keys(selReponer).length})` : ''}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {(pedidos.length > 0 || solEnCamino.length > 0) && (
+                <div className={`px-4 py-3 ${(faltaPedir.length > 0 || solPorPedir.length > 0) ? 'border-t border-slate-100' : ''}`}>
+                  <p className="text-xs font-bold text-blue-700 uppercase tracking-wide mb-1">Pedidos en camino ({pedidos.length + solEnCamino.length})</p>
+                  <p className="text-xs text-slate-400 mb-2">Ya pedidos. Cuando llegan, cargalos en Ingresos y se descuentan solos de acá.</p>
+                  <div className="divide-y divide-slate-100">
+                    {pedidos.map((p: any) => {
+                      const it = itemById[p.insumo_id]
+                      const recibida = Number(p.recibida || 0)
+                      const falta = Number(p.cantidad) - recibida
+                      return (
+                        <div key={p.id} className="py-2 flex items-center gap-3 flex-wrap">
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-medium text-slate-700 truncate">{it?.nombre || 'Ítem eliminado'}</p>
+                            <p className="text-xs text-slate-400">
+                              Pedido el {p.fecha.split('-').reverse().join('/')} ({haceDias(p.fecha)}){p.nota ? ` — ${p.nota}` : ''}
+                            </p>
+                          </div>
+                          <div className="shrink-0 flex items-center gap-3 text-sm text-slate-600">
+                            {canPedir && editingPedidoCant === p.id ? (
+                              <input type="number" autoFocus defaultValue={p.cantidad}
+                                onBlur={(e) => savePedidoCantidad(p.id, e.target.value, recibida)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                                className="w-16 text-center rounded-md border border-blue-300 py-0.5 text-xs" />
+                            ) : (
+                              <button onClick={() => canPedir && setEditingPedidoCant(p.id)} disabled={!canPedir}
+                                className={`font-semibold ${canPedir ? 'hover:underline decoration-dotted' : ''}`}>
+                                {recibida > 0 ? `Faltan ${fmtN(falta)} de ${fmtN(Number(p.cantidad))}` : fmtN(Number(p.cantidad))} {it?.unidad_medida}
+                              </button>
+                            )}
+                            {canPedir && <button onClick={() => cancelarPedido(p.id)} className="text-xs text-rose-500 hover:underline">Cancelar</button>}
+                          </div>
+                        </div>
+                      )
+                    })}
+                    {solEnCamino.map((s: any) => (
+                      <div key={s.id} className="py-2 flex items-center gap-3 flex-wrap">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-slate-700 truncate">
+                            {s.insumos?.nombre}
+                            <span className="ml-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 align-middle">A pedido</span>
+                          </p>
+                          <p className="text-xs text-slate-400">
+                            Pedido el {s.pedido_fecha.split('-').reverse().join('/')} ({haceDias(s.pedido_fecha)}){s.notas ? ` — ${s.notas}` : ''}
+                          </p>
+                        </div>
+                        <div className="shrink-0 flex items-center gap-3 text-sm text-slate-600">
+                          <span className="font-semibold">{s.cantidad} {s.insumos?.unidad_medida}</span>
+                          {canPedir && <button onClick={() => cancelarSolicitud(s.id)} className="text-xs text-rose-500 hover:underline">Cancelar</button>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -624,13 +933,13 @@ export default function InsumosPage() {
               {categorias.filter((c) => itemsByCategoria[c.id]?.length > 0).map((c) => (
                 <div key={c.id}>
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">{c.nombre}</p>
-                  <ItemsTable items={itemsByCategoria[c.id]} stockByItem={stockByItem} canEdit={canEdit} onDelete={deleteItem} onSelect={openItemHistory} onSaveCodigo={saveItemCodigo} onSaveNombre={saveItemNombre} onSaveUnidad={saveItemUnidad} onSaveStockMinimo={saveItemStockMinimo} onToggleAPedido={toggleAPedido} onPedir={openPedir} pendientesPorItem={pendientesPorItem} />
+                  <ItemsTable items={itemsByCategoria[c.id]} stockByItem={stockByItem} canEdit={canEdit} onDelete={deleteItem} onSelect={openItemHistory} onSaveCodigo={saveItemCodigo} onSaveNombre={saveItemNombre} onSaveUnidad={saveItemUnidad} onSaveStockMinimo={saveItemStockMinimo} onToggleAPedido={toggleAPedido} onPedir={openPedir} pendientesPorItem={pendientesPorItem} enCaminoPorItem={enCaminoPorItem} primerPedidoPorItem={primerPedidoPorItem} enCaminoSolPorItem={enCaminoSolPorItem} />
                 </div>
               ))}
               {sinCategoria.length > 0 && (
                 <div>
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Sin categoría</p>
-                  <ItemsTable items={sinCategoria} stockByItem={stockByItem} canEdit={canEdit} onDelete={deleteItem} onSelect={openItemHistory} onSaveCodigo={saveItemCodigo} onSaveNombre={saveItemNombre} onSaveUnidad={saveItemUnidad} onSaveStockMinimo={saveItemStockMinimo} onToggleAPedido={toggleAPedido} onPedir={openPedir} pendientesPorItem={pendientesPorItem} />
+                  <ItemsTable items={sinCategoria} stockByItem={stockByItem} canEdit={canEdit} onDelete={deleteItem} onSelect={openItemHistory} onSaveCodigo={saveItemCodigo} onSaveNombre={saveItemNombre} onSaveUnidad={saveItemUnidad} onSaveStockMinimo={saveItemStockMinimo} onToggleAPedido={toggleAPedido} onPedir={openPedir} pendientesPorItem={pendientesPorItem} enCaminoPorItem={enCaminoPorItem} primerPedidoPorItem={primerPedidoPorItem} enCaminoSolPorItem={enCaminoSolPorItem} />
                 </div>
               )}
             </div>
@@ -696,6 +1005,11 @@ export default function InsumosPage() {
               {inItem && (
                 <p className="text-xs text-slate-400 mb-3">
                   Stock actual de {inItem.nombre}: <strong className="text-slate-600">{stockByItem[inItem.id] || 0} {inItem.unidad_medida}</strong>
+                </p>
+              )}
+              {inItem && (enCaminoPorItem[inItem.id] || 0) > 0 && (
+                <p className="text-xs text-blue-600 mb-3">
+                  Hay un pedido en camino de <strong>{fmtN(enCaminoPorItem[inItem.id])} {inItem.unidad_medida}</strong> de este ítem. Lo que cargues acá se descuenta solo del pedido.
                 </p>
               )}
               <button onClick={registrarIngreso} className="bg-emerald-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-emerald-700">
@@ -968,7 +1282,7 @@ export default function InsumosPage() {
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setPedirItem(null)}>
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6" onClick={(e) => e.stopPropagation()}>
             <h3 className="font-semibold text-slate-800 text-lg mb-1">Pedir: {pedirItem.nombre}</h3>
-            <p className="text-sm text-slate-500 mb-4">Queda anotado y aparece en el Excel de compra hasta que llegue.</p>
+            <p className="text-sm text-slate-500 mb-4">Queda anotado en "Para reponer" (Falta pedir) hasta que Agustín lo pida; después figura como pedido en camino hasta que lo cargues en Ingresos.</p>
             <div className="space-y-3">
               <div>
                 <label className="text-xs text-slate-500">Cantidad ({pedirItem.unidad_medida})</label>
@@ -1107,11 +1421,12 @@ export default function InsumosPage() {
   )
 }
 
-function ItemsTable({ items, stockByItem, canEdit, onDelete, onSelect, onSaveCodigo, onSaveNombre, onSaveUnidad, onSaveStockMinimo, onToggleAPedido, onPedir, pendientesPorItem }: {
+function ItemsTable({ items, stockByItem, canEdit, onDelete, onSelect, onSaveCodigo, onSaveNombre, onSaveUnidad, onSaveStockMinimo, onToggleAPedido, onPedir, pendientesPorItem, enCaminoPorItem, primerPedidoPorItem, enCaminoSolPorItem }: {
   items: any[]; stockByItem: Record<string, number>; canEdit: boolean; onDelete: (id: string) => void; onSelect: (item: any) => void
   onSaveCodigo: (id: string, value: string) => void; onSaveNombre: (id: string, value: string) => void
   onSaveUnidad: (id: string, value: string) => void; onSaveStockMinimo: (id: string, value: string) => void
   onToggleAPedido: (item: any, value: boolean) => void; onPedir: (item: any) => void; pendientesPorItem: Record<string, number>
+  enCaminoPorItem: Record<string, number>; primerPedidoPorItem: Record<string, string>; enCaminoSolPorItem: Record<string, number>
 }) {
   const [editingField, setEditingField] = useState<{ id: string; field: 'codigo' | 'nombre' | 'unidad' | 'stock_minimo' } | null>(null)
 
@@ -1137,7 +1452,9 @@ function ItemsTable({ items, stockByItem, canEdit, onDelete, onSelect, onSaveCod
           {items.map((it) => {
             const stock = stockByItem[it.id] || 0
             const aPedido = !!it.a_pedido
-            const bajo = !aPedido && stock < it.stock_minimo
+            const enCamino = enCaminoPorItem[it.id] || 0
+            const enCaminoSol = enCaminoSolPorItem[it.id] || 0
+            const bajo = !aPedido && stock + enCamino < it.stock_minimo
             const pendientes = pendientesPorItem[it.id] || 0
             return (
               <tr key={it.id} className="border-t border-slate-100">
@@ -1216,19 +1533,36 @@ function ItemsTable({ items, stockByItem, canEdit, onDelete, onSelect, onSaveCod
                 </td>
                 <td className="p-3 text-center">
                   {aPedido ? (
-                    pendientes > 0 ? (
-                      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
-                        ⏳ {pendientes} pedido{pendientes > 1 ? 's' : ''} pendiente{pendientes > 1 ? 's' : ''}
-                      </span>
-                    ) : (
-                      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">Sin pedidos</span>
-                    )
+                    <div className="flex flex-col items-center gap-1">
+                      {pendientes > 0 && (
+                        <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                          {pendientes} por pedir
+                        </span>
+                      )}
+                      {enCaminoSol > 0 && (
+                        <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                          {enCaminoSol} en camino
+                        </span>
+                      )}
+                      {pendientes === 0 && enCaminoSol === 0 && (
+                        <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">Sin pedidos</span>
+                      )}
+                    </div>
                   ) : (
-                    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-                      bajo ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'
-                    }`}>
-                      {bajo ? '⚠ Stock bajo' : 'OK'}
-                    </span>
+                    <div className="flex flex-col items-center gap-1">
+                      {bajo && (
+                        <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-rose-100 text-rose-700">⚠ Falta pedir</span>
+                      )}
+                      {enCamino > 0 && (
+                        <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                          Pedido · {new Intl.NumberFormat('es-AR', { maximumFractionDigits: 2 }).format(enCamino)} {it.unidad_medida}
+                          {primerPedidoPorItem[it.id] ? ` · ${haceDias(primerPedidoPorItem[it.id])}` : ''}
+                        </span>
+                      )}
+                      {!bajo && enCamino === 0 && (
+                        <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">OK</span>
+                      )}
+                    </div>
                   )}
                 </td>
                 <td className="p-3 text-right">
