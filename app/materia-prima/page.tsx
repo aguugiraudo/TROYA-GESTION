@@ -364,10 +364,10 @@ export default function MateriaPrimaPage() {
       alert('Cargá productos y cantidades en la calculadora antes de exportar.')
       return
     }
-    const header = ['Proveedor', 'C\u00F3digo', 'Material', 'Necesario', 'Stock actual (u.)', 'A comprar (u.)']
+    const header = ['Proveedor', 'C\u00F3digo', 'Material', 'Necesario (u.)', 'Stock actual (u.)', 'A comprar (u.)']
     const rows = sortMaterials(materialTotalsSorted).map((m) => {
-      const { aComprar, disponible } = aComprarInfo(m)
-      return [m.proveedor, m.codigo || '', m.nombre, `${Math.round(m.total * 100) / 100} ${m.unidad}`, disponible, aComprar]
+      const { aComprar, disponible, necesario } = aComprarInfo(m)
+      return [m.proveedor, m.codigo || '', m.nombre, necesario, disponible, aComprar]
     })
     const ws = XLSX.utils.aoa_to_sheet([header, ...rows])
     ws['!cols'] = [{ wch: 25 }, { wch: 10 }, { wch: 40 }, { wch: 16 }, { wch: 14 }, { wch: 14 }]
@@ -467,7 +467,11 @@ export default function MateriaPrimaPage() {
     const stockActual = stockByMaterial[m.materialId] || 0
     const disponible = Math.round((stockActual / pres) * 100) / 100
     const aComprar = Math.max(0, Math.ceil(necesarioEnPresentacion - disponible))
-    return { aComprar, disponible }
+    // Todo en la misma unidad: si el material tiene presentación (chapa, barra) se muestra en "u.";
+    // si no, en su unidad base (kg, u., etc.)
+    const unidadLabel = m.presentacion > 1 ? 'u.' : m.unidad
+    const necesario = Math.round(necesarioEnPresentacion * 100) / 100
+    return { aComprar, disponible, necesario, unidadLabel }
   }
 
   const materialsByProveedor: Record<string, typeof materialTotalsList> = {}
@@ -1043,17 +1047,17 @@ export default function MateriaPrimaPage() {
                     </thead>
                     <tbody>
                       {sortMaterials(materialsByProveedor[prov]).map((m) => {
-                        const { aComprar, disponible } = aComprarInfo(m)
+                        const { aComprar, disponible, necesario, unidadLabel } = aComprarInfo(m)
                         return (
                           <tr key={m.nombre + m.codigo} className="border-t border-slate-100">
                             <td className="p-3 text-slate-400 text-xs">{m.codigo || '—'}</td>
                             <td className="p-3 text-slate-700 font-medium">{m.nombre}</td>
-                            <td className="p-3 text-right text-slate-500">{Math.round(m.total * 100) / 100} {m.unidad}</td>
+                            <td className="p-3 text-right text-slate-500">{necesario} {unidadLabel}</td>
                             <td className="p-3 text-right text-xs text-slate-500">
-                              {disponible != null ? `${disponible} u.` : '—'}
+                              {disponible != null ? `${disponible} ${unidadLabel}` : '—'}
                             </td>
                             <td className="p-3 text-right font-semibold text-slate-700">
-                              {aComprar != null ? `${aComprar} u.` : '—'}
+                              {aComprar != null ? `${aComprar} ${unidadLabel}` : '—'}
                             </td>
                           </tr>
                         )
@@ -1078,18 +1082,18 @@ export default function MateriaPrimaPage() {
                 </thead>
                 <tbody>
                   {materialTotalsSorted.map((m) => {
-                    const { aComprar, disponible } = aComprarInfo(m)
+                    const { aComprar, disponible, necesario, unidadLabel } = aComprarInfo(m)
                     return (
                       <tr key={m.nombre + m.codigo} className="border-t border-slate-100">
                         <td className="p-3 text-slate-400 text-xs">{m.codigo || '—'}</td>
                         <td className="p-3 text-slate-700 font-medium">{m.nombre}</td>
                         <td className="p-3 text-slate-500 text-xs">{m.proveedor}</td>
-                        <td className="p-3 text-right text-slate-500">{Math.round(m.total * 100) / 100} {m.unidad}</td>
+                        <td className="p-3 text-right text-slate-500">{necesario} {unidadLabel}</td>
                         <td className="p-3 text-right text-xs text-slate-500">
-                          {disponible != null ? `${disponible} u.` : '—'}
+                          {disponible != null ? `${disponible} ${unidadLabel}` : '—'}
                         </td>
                         <td className="p-3 text-right font-semibold text-slate-700">
-                          {aComprar != null ? `${aComprar} u.` : '—'}
+                          {aComprar != null ? `${aComprar} ${unidadLabel}` : '—'}
                         </td>
                       </tr>
                     )
