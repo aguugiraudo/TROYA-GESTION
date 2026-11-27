@@ -57,6 +57,7 @@ const groups = [
 
 const standalone = [
   { href: '/mantenimiento', label: 'Mantenimiento', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
+  { href: '/mejora-continua', label: 'Mejora continua', roles: ['perfil_1', 'perfil_2', 'perfil_3'] },
   { href: '/caja', label: 'Caja y Chatarra', roles: ['perfil_1'] },
     { href: '/dashboard', label: 'Dashboard', roles: ['perfil_1', 'perfil_3'] },
 ]
