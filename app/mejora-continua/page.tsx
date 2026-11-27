@@ -2,1252 +2,697 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { useAuth } from '../components/AuthGate'
-import * as XLSX from 'xlsx'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-type Tab = 'stock' | 'inventario' | 'calculadora' | 'composicion'
+type Filtro = 'todas' | 'vencidas' | 'sinfecha' | 'cola' | 'terminadas'
+type Vista = 'lista' | 'calendario'
+type Modal =
+  | { modo: 'problema' }
+  | { modo: 'accion'; problema: any }
+  | { modo: 'editar'; accion: any }
+  | { modo: 'pegar' }
+  | null
 
+// ---------- fechas (formato AAAA-MM-DD, hora local) ----------
+function iso(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 function today() {
-  return new Date().toISOString().split('T')[0]
+  return iso(new Date())
 }
-
-function formatStock(baseQty: number, material: any) {
-  const pres = Number(material.presentacion || 1)
-  if (pres > 1) {
-    const enPresentacion = baseQty / pres
-    return `${Math.round(enPresentacion * 100) / 100} u. (${Math.round(baseQty * 100) / 100} ${material.unidad_medida})`
-  }
-  return `${Math.round(baseQty * 100) / 100} ${material.unidad_medida}`
+function shortDate(s: string | null) {
+  if (!s) return '—'
+  return s.split('T')[0].split('-').reverse().slice(0, 2).join('/')
 }
-
-function toggleSort(current: string, dir: 1 | -1, col: string, setBy: (v: any) => void, setDir: (v: 1 | -1) => void) {
-  if (current === col) setDir(dir === 1 ? -1 : 1)
-  else { setBy(col); setDir(1) }
+function fullDate(s: string | null) {
+  if (!s) return '—'
+  return s.split('T')[0].split('-').reverse().join('/')
 }
+const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
+const DIAS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
 
-export default function MateriaPrimaPage() {
+export default function MejoraContinuaPage() {
   const { role } = useAuth()
   const canEdit = role === 'perfil_1' || role === 'perfil_2'
+  const esDueno = role === 'perfil_1'
 
-  const [tab, setTab] = useState<Tab>('stock')
-  const [showAyuda, setShowAyuda] = useState(false)
-
-  const [products, setProducts] = useState<any[]>([])
-  const [materiales, setMateriales] = useState<any[]>([])
-  const [sectors, setSectors] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [setupError, setSetupError] = useState<string | null>(null)
+  const [problemas, setProblemas] = useState<any[]>([])
+  const [acciones, setAcciones] = useState<any[]>([])
+  const [tope, setTope] = useState(14)
 
-  // --- Composición ---
-  const [compSearch, setCompSearch] = useState('')
-  const [selectedProduct, setSelectedProduct] = useState<any | null>(null)
-  const [productMaterials, setProductMaterials] = useState<any[]>([])
-  const [newMatName, setNewMatName] = useState('')
-  const [newMatUnidad, setNewMatUnidad] = useState('u.')
-  const [newMatStockMinimo, setNewMatStockMinimo] = useState('0')
-  const [newMatPresentacion, setNewMatPresentacion] = useState('1')
-  const [newMatUbicacion, setNewMatUbicacion] = useState('')
-  const [addMatId, setAddMatId] = useState('')
-  const [addMatQty, setAddMatQty] = useState('')
-  const [addMatSector, setAddMatSector] = useState('')
+  const [filtro, setFiltro] = useState<Filtro>('todas')
+  const [busqueda, setBusqueda] = useState('')
+  const [vista, setVista] = useState<Vista>('lista')
+  const [mesCal, setMesCal] = useState(() => {
+    const d = new Date()
+    return { y: d.getFullYear(), m: d.getMonth() }
+  })
 
-  // --- Calculadora ---
-  const [calcSearch, setCalcSearch] = useState('')
-  const [calcShowList, setCalcShowList] = useState(false)
-  const [calcRows, setCalcRows] = useState<{ productId: string; productName: string; qty: string }[]>([])
-  const [allProductMaterials, setAllProductMaterials] = useState<any[]>([])
-  const [stockSortBy, setStockSortBy] = useState<'codigo' | 'nombre' | 'proveedor_nombre' | 'stock' | 'stock_minimo'>('nombre')
-  const [stockSortDir, setStockSortDir] = useState<1 | -1>(1)
-  const [calcGroupByProveedor, setCalcGroupByProveedor] = useState(true)
-  const [calcSortBy, setCalcSortBy] = useState<'nombre' | 'codigo' | 'proveedor'>('proveedor')
+  const [modal, setModal] = useState<Modal>(null)
+  const [fTitulo, setFTitulo] = useState('')
+  const [fDesc, setFDesc] = useState('')
+  const [fFecha, setFFecha] = useState('')
+  const [fResp, setFResp] = useState('')
+  const [fTexto, setFTexto] = useState('')
+  const [saving, setSaving] = useState(false)
 
-  // --- Stock ---
-  const [stockByMaterial, setStockByMaterial] = useState<Record<string, number>>({})
-  const [movimientos, setMovimientos] = useState<any[]>([])
-  const [showNewMaterial, setShowNewMaterial] = useState(false)
-  const [editingPresentacion, setEditingPresentacion] = useState<string | null>(null)
-  const [editingUnidad, setEditingUnidad] = useState<string | null>(null)
-  const [editingUbicacion, setEditingUbicacion] = useState<string | null>(null)
-  const [editingNombre, setEditingNombre] = useState<string | null>(null)
-  const [editingCodigo, setEditingCodigo] = useState<string | null>(null)
-  const [editingProveedor, setEditingProveedor] = useState<string | null>(null)
-  const [editingStockMinimo, setEditingStockMinimo] = useState<string | null>(null)
+  useEffect(() => {
+    cargar()
+  }, [])
 
-  // --- Inventario físico ---
-  const [invUbicacionFilter, setInvUbicacionFilter] = useState('')
-  const [invCounts, setInvCounts] = useState<Record<string, string>>({})
-  const [invSavedDiffs, setInvSavedDiffs] = useState<Record<string, number>>({})
-  const [ingSearch, setIngSearch] = useState('')
-  const [ingShowList, setIngShowList] = useState(false)
-  const [ingMaterial, setIngMaterial] = useState<any | null>(null)
-  const [ingCantidad, setIngCantidad] = useState('')
-  const [ingFecha, setIngFecha] = useState(new Date().toISOString().split('T')[0])
-  const [ingNotes, setIngNotes] = useState('')
-
-  async function fetchAll() {
-    setLoading(true)
-    const { data: productsData } = await supabase.from('products').select('id, code, name').order('name')
-    setProducts(productsData || [])
-    const { data: matData } = await supabase.from('materiales').select('*').order('nombre')
-    setMateriales(matData || [])
-    const { data: sectorsData } = await supabase.from('sectors').select('*').order('sequence_no')
-    setSectors(sectorsData || [])
-    const { data: pmData } = await supabase.from('producto_materiales').select('*, materiales(nombre, unidad_medida, codigo, proveedor_nombre, presentacion, ultimo_conteo_fecha, ultimo_conteo_cantidad), sectors(name)')
-    setAllProductMaterials(pmData || [])
-
-    const { data: draftData } = await supabase.from('compras_calculadora_draft').select('*, products(name)')
-    setCalcRows((draftData || []).map((d: any) => ({
-      productId: d.product_id, productName: d.products?.name || '', qty: d.qty != null ? String(d.qty) : '',
-    })))
-
-    const { data: stockData } = await supabase.from('material_stock').select('*')
-    const stockMap: Record<string, number> = {}
-    ;(stockData || []).forEach((r: any) => { stockMap[r.material_id] = Number(r.stock_actual) })
-    setStockByMaterial(stockMap)
-
-    const { data: movData } = await supabase
-      .from('material_movimientos')
-      .select('*, materiales(nombre, unidad_medida)')
-      .order('fecha', { ascending: false })
-      .order('created_at', { ascending: false })
-      .limit(40)
-    setMovimientos(movData || [])
-
+  async function cargar() {
+    const [pRes, aRes, cRes] = await Promise.all([
+      supabase.from('mejora_problemas').select('*').order('numero'),
+      supabase.from('mejora_acciones').select('*').order('numero'),
+      supabase.from('mejora_config').select('tope').eq('id', 1).maybeSingle(),
+    ])
+    if (pRes.error || aRes.error) {
+      setSetupError((pRes.error || aRes.error)!.message)
+      setLoading(false)
+      return
+    }
+    setSetupError(null)
+    setProblemas(pRes.data || [])
+    setAcciones(aRes.data || [])
+    if (cRes.data?.tope) setTope(cRes.data.tope)
     setLoading(false)
   }
 
-  useEffect(() => { fetchAll() }, [])
+  // ---------- datos derivados ----------
+  const hoy = today()
+  const problemaById: Record<string, any> = {}
+  problemas.forEach((p) => (problemaById[p.id] = p))
 
-  async function fetchProductMaterials(productId: string) {
-    const { data } = await supabase
-      .from('producto_materiales').select('*, materiales(nombre, unidad_medida), sectors(name)').eq('product_id', productId)
-    setProductMaterials(data || [])
+  const items = acciones
+    .filter((a) => problemaById[a.problema_id])
+    .map((a) => ({ ...a, p: problemaById[a.problema_id] }))
+    .sort((x, y) => x.p.numero - y.p.numero || x.numero - y.numero)
+
+  const numLabel = (a: any) => `${a.p.numero}.${a.numero}`
+  const vencida = (a: any) => a.estado !== 'terminada' && !!a.fecha && a.fecha < hoy
+
+  const enTablero = items.filter((a) => a.estado === 'tablero')
+  const enCola = items.filter((a) => a.estado === 'cola').sort((x, y) => x.orden - y.orden)
+  const terminadas = items.filter((a) => a.estado === 'terminada').sort((x, y) => (y.terminada_at || '').localeCompare(x.terminada_at || ''))
+  const lugaresLibres = Math.max(0, tope - enTablero.length)
+
+  const q = busqueda.trim().toLowerCase()
+  function coincide(a: any) {
+    if (!q) return true
+    if (/^\d+(\.\d+)?$/.test(q)) return q.includes('.') ? numLabel(a) === q : String(a.p.numero) === q
+    return `${a.p.titulo} ${a.descripcion} ${a.responsable || ''}`.toLowerCase().includes(q)
   }
 
-  async function selectProductForComp(p: any) {
-    setSelectedProduct(p)
-    setCompSearch('')
-    await fetchProductMaterials(p.id)
+  const tableroFiltrado = enTablero.filter((a) => {
+    if (filtro === 'vencidas' && !vencida(a)) return false
+    if (filtro === 'sinfecha' && a.fecha) return false
+    return coincide(a)
+  })
+  const colaFiltrada = enCola.filter(coincide)
+  const terminadasFiltradas = terminadas.filter(coincide)
+
+  const cntVencidas = enTablero.filter(vencida).length
+  const cntSinFecha = enTablero.filter((a) => !a.fecha).length
+  const responsables = Array.from(new Set(items.map((a) => a.responsable).filter(Boolean))).sort() as string[]
+
+  const mostrarTablero = filtro === 'todas' || filtro === 'vencidas' || filtro === 'sinfecha'
+  const mostrarCola = filtro === 'todas' || filtro === 'cola'
+  const mostrarTerminadas = filtro === 'todas' || filtro === 'terminadas'
+  const hayFiltro = filtro !== 'todas' || busqueda !== ''
+
+  // ---------- acciones sobre la base ----------
+  async function run(fn: () => PromiseLike<{ error: any }>) {
+    const { error } = await fn()
+    if (error) alert('No se pudo guardar: ' + error.message)
+    await cargar()
   }
 
-  async function addMaterialGlobal() {
-    if (!newMatName.trim()) return
-    const presentacion = parseFloat(newMatPresentacion || '1') || 1
-    const stockMinimoBase = parseFloat(newMatStockMinimo || '0') * presentacion
-    const { error } = await supabase.from('materiales').insert({
-      nombre: newMatName.trim(), unidad_medida: newMatUnidad.trim() || 'u.',
-      presentacion, stock_minimo: stockMinimoBase, ubicacion: newMatUbicacion.trim() || null,
+  async function marcarAvance(a: any, v: number) {
+    if (!canEdit) return
+    const nuevo = a.avance === v ? v - 25 : v
+    if (nuevo === 100 && !confirm(`¿Marcar la acción ${numLabel(a)} como TERMINADA (100%)? Pasa al historial y sube la primera de la cola.`)) return
+    await run(() => supabase.from('mejora_acciones').update({ avance: nuevo }).eq('id', a.id))
+  }
+
+  async function guardarCampo(a: any, campo: 'fecha' | 'responsable', valor: string) {
+    if (!canEdit) return
+    const v = campo === 'responsable' ? valor.trim().toUpperCase() || null : valor || null
+    if ((a[campo] || null) === v) return
+    await run(() => supabase.from('mejora_acciones').update({ [campo]: v }).eq('id', a.id))
+  }
+
+  async function mover(a: any, dir: -1 | 1) {
+    const idx = enCola.findIndex((x) => x.id === a.id)
+    const otro = enCola[idx + dir]
+    if (!otro) return
+    await run(async () => {
+      const r1 = await supabase.from('mejora_acciones').update({ orden: otro.orden }).eq('id', a.id)
+      if (r1.error) return r1
+      return supabase.from('mejora_acciones').update({ orden: a.orden }).eq('id', otro.id)
     })
-    if (error) { alert('Error al crear el material: ' + error.message); return }
-    setNewMatName(''); setNewMatUnidad('u.'); setNewMatStockMinimo('0'); setNewMatPresentacion('1'); setNewMatUbicacion('')
-    setShowNewMaterial(false)
-    fetchAll()
   }
 
-  function pickIngMaterial(m: any) {
-    setIngMaterial(m); setIngSearch(m.nombre); setIngShowList(false)
+  async function subirAlTablero(a: any) {
+    if (lugaresLibres <= 0) return
+    await run(() => supabase.from('mejora_acciones').update({ estado: 'tablero' }).eq('id', a.id))
   }
 
-  function resetIngresoForm() {
-    setIngSearch(''); setIngMaterial(null); setIngCantidad(''); setIngFecha(new Date().toISOString().split('T')[0]); setIngNotes('')
+  async function reabrir(a: any) {
+    if (!confirm(`¿Reabrir la acción ${numLabel(a)}? Vuelve con 75% de avance.`)) return
+    await run(() => supabase.from('mejora_acciones').update({ avance: 75, estado: lugaresLibres > 0 ? 'tablero' : 'cola' }).eq('id', a.id))
   }
 
-  async function registrarIngresoMaterial() {
-    if (!ingMaterial) { alert('Elegí un material.'); return }
-    const cantidadInput = parseFloat(ingCantidad || '0')
-    if (!cantidadInput || cantidadInput <= 0) { alert('Ingresá una cantidad válida.'); return }
-    const presentacion = Number(ingMaterial.presentacion || 1)
-    const cantidadBase = presentacion > 1 ? cantidadInput * presentacion : cantidadInput
-    const { error } = await supabase.from('material_movimientos').insert({
-      material_id: ingMaterial.id, tipo: 'ingreso', cantidad: cantidadBase, origen: 'manual', fecha: ingFecha, notes: ingNotes || null,
-    })
-    if (error) { alert('Error al registrar el ingreso: ' + error.message); return }
-    resetIngresoForm()
-    fetchAll()
+  async function cambiarTope() {
+    const txt = prompt('¿Cuántas acciones pueden estar en el tablero al mismo tiempo?', String(tope))
+    if (txt === null) return
+    const n = parseInt(txt, 10)
+    if (!n || n < 1) { alert('Poné un número mayor a 0.'); return }
+    await run(() => supabase.from('mejora_config').update({ tope: n }).eq('id', 1))
   }
 
-  async function deleteMovimiento(id: string) {
-    if (!confirm('¿Eliminar este movimiento? El stock se recalcula solo.')) return
-    await supabase.from('material_movimientos').delete().eq('id', id)
-    fetchAll()
-  }
-
-  async function addMaterialToProduct() {
-    if (!selectedProduct || !addMatId || !addMatQty) { alert('Elegí un material y una cantidad.'); return }
-    const { error } = await supabase.from('producto_materiales').insert({
-      product_id: selectedProduct.id, material_id: addMatId, cantidad_por_unidad: parseFloat(addMatQty),
-      sector_id: addMatSector || null,
-    })
-    if (error) { alert('Error al agregar: ' + error.message); return }
-    setAddMatId(''); setAddMatQty(''); setAddMatSector('')
-    fetchProductMaterials(selectedProduct.id)
-    fetchAll()
-  }
-
-  async function saveProductMaterialQty(id: string, qty: number) {
-    await supabase.from('producto_materiales').update({ cantidad_por_unidad: qty }).eq('id', id)
-    if (selectedProduct) fetchProductMaterials(selectedProduct.id)
-    fetchAll()
-  }
-
-  async function saveProductMaterialSector(id: string, sectorId: string) {
-    await supabase.from('producto_materiales').update({ sector_id: sectorId || null }).eq('id', id)
-    if (selectedProduct) fetchProductMaterials(selectedProduct.id)
-    fetchAll()
-  }
-
-  async function saveMaterialPresentacion(m: any, newPresentacionValue: string) {
-    const nuevaPresentacion = parseFloat(newPresentacionValue || '1') || 1
-    const presentacionAnterior = Number(m.presentacion || 1)
-    // Recalculamos el stock mínimo para que la cantidad de "chapas" mínimas configuradas no cambie
-    const stockMinimoEnChapas = presentacionAnterior > 0 ? m.stock_minimo / presentacionAnterior : m.stock_minimo
-    const nuevoStockMinimoBase = stockMinimoEnChapas * nuevaPresentacion
-    const { error } = await supabase.from('materiales').update({
-      presentacion: nuevaPresentacion, stock_minimo: nuevoStockMinimoBase,
-    }).eq('id', m.id)
-    if (error) { alert('Error al actualizar la presentación: ' + error.message); return }
-    setEditingPresentacion(null)
-    fetchAll()
-  }
-
-  async function deleteMaterial(m: any) {
-    const usosEnProductos = allProductMaterials.filter((pm) => pm.material_id === m.id).length
-    const tieneMovimientos = movimientos.some((mv) => mv.material_id === m.id)
-    let msg = `¿Eliminar "${m.nombre}"?`
-    if (usosEnProductos > 0) msg += `\n\nOjo: está usado en la composición de ${usosEnProductos} producto(s) — esos vínculos también se van a borrar.`
-    if (tieneMovimientos) msg += `\n\nOjo: tiene movimientos de stock cargados (ingresos/egresos/ajustes) — se van a borrar junto con el material. Esto no se puede deshacer.`
-    if (!confirm(msg)) return
-    const { error } = await supabase.from('materiales').delete().eq('id', m.id)
-    if (error) { alert('Error al eliminar: ' + error.message); return }
-    fetchAll()
-  }
-
-  async function saveMaterialNombre(id: string, value: string) {
-    if (!value.trim()) { setEditingNombre(null); return }
-    const { error } = await supabase.from('materiales').update({ nombre: value.trim() }).eq('id', id)
-    if (error) { alert('Error al renombrar: ' + error.message); return }
-    setEditingNombre(null)
-    fetchAll()
-  }
-
-  async function saveMaterialCodigo(id: string, value: string) {
-    const { error } = await supabase.from('materiales').update({ codigo: value.trim() || null }).eq('id', id)
-    if (error) { alert('Error al actualizar el código (puede que ya exista otro material con ese código): ' + error.message); return }
-    setEditingCodigo(null)
-    fetchAll()
-  }
-
-  async function saveMaterialProveedor(id: string, value: string) {
-    const { error } = await supabase.from('materiales').update({ proveedor_nombre: value.trim() || null }).eq('id', id)
-    if (error) { alert('Error al actualizar el proveedor: ' + error.message); return }
-    setEditingProveedor(null)
-    fetchAll()
-  }
-
-  // El stock mínimo se tipea en unidades de presentación (chapas), igual que se muestra en pantalla
-  async function saveMaterialStockMinimo(m: any, value: string) {
-    const pres = Number(m.presentacion || 1)
-    const nuevoStockMinimoBase = parseFloat(value || '0') * pres
-    const { error } = await supabase.from('materiales').update({ stock_minimo: nuevoStockMinimoBase }).eq('id', m.id)
-    if (error) { alert('Error al actualizar el stock mínimo: ' + error.message); return }
-    setEditingStockMinimo(null)
-    fetchAll()
-  }
-
-  async function saveMaterialUnidad(id: string, value: string) {
-    if (!value.trim()) { setEditingUnidad(null); return }
-    const { error } = await supabase.from('materiales').update({ unidad_medida: value.trim() }).eq('id', id)
-    if (error) { alert('Error al actualizar la unidad: ' + error.message); return }
-    setEditingUnidad(null)
-    fetchAll()
-  }
-
-  async function saveMaterialUbicacion(id: string, value: string) {
-    await supabase.from('materiales').update({ ubicacion: value.trim() || null }).eq('id', id)
-    setEditingUbicacion(null)
-    fetchAll()
-  }
-
-  function updateInvCount(materialId: string, value: string) {
-    setInvCounts((prev) => ({ ...prev, [materialId]: value }))
-  }
-
-  // Guarda el ajuste de UN material: calcula la diferencia contra el stock teórico y genera
-  // el movimiento correspondiente (ingreso si contó de más, egreso si contó de menos)
-  async function saveInventoryAdjustment(m: any) {
-    const contadoInput = invCounts[m.id]
-    if (contadoInput === undefined || contadoInput === '') return
-    const pres = Number(m.presentacion || 1)
-    const contadoBase = parseFloat(contadoInput) * pres
-    const stockTeorico = stockByMaterial[m.id] || 0
-    const diferencia = contadoBase - stockTeorico
-    if (diferencia !== 0) {
-      await supabase.from('material_movimientos').insert({
-        material_id: m.id,
-        tipo: diferencia > 0 ? 'ingreso' : 'egreso',
-        cantidad: Math.abs(diferencia),
-        origen: 'ajuste_inventario',
-        notes: `Inventario físico: contado ${contadoInput} u. (${Math.round(contadoBase * 100) / 100} ${m.unidad_medida}), teórico ${Math.round((stockTeorico / (pres > 1 ? pres : 1)) * 100) / 100} u.`,
-      })
+  // ---------- ventana de carga / edición ----------
+  function abrirModal(m: Modal) {
+    setFTitulo(''); setFDesc(''); setFFecha(''); setFResp(''); setFTexto('')
+    if (m && m.modo === 'editar') {
+      setFTitulo(m.accion.p.titulo)
+      setFDesc(m.accion.descripcion)
+      setFFecha(m.accion.fecha || '')
+      setFResp(m.accion.responsable || '')
     }
-    // Guardamos SIEMPRE la fecha y cantidad del conteo (aunque diera igual al teórico), para que el
-    // Excel de Inventario refleje el último conteo real, no el stock teórico del momento de exportar
-    const { error: errorConteo } = await supabase.from('materiales').update({
-      ultimo_conteo_fecha: today(), ultimo_conteo_cantidad: parseFloat(contadoInput),
-    }).eq('id', m.id)
-    if (errorConteo) {
-      alert(`No se pudo guardar el último conteo de "${m.nombre}" (puede que falte correr el SQL que agrega esas columnas): ${errorConteo.message}`)
-      return
-    }
-    setInvSavedDiffs((prev) => ({ ...prev, [m.id]: diferencia }))
-    fetchAll()
+    setModal(m)
   }
 
-  async function saveAllInventoryAdjustments() {
-    const toSave = materialesFiltradosInventario.filter((m) => invCounts[m.id] !== undefined && invCounts[m.id] !== '')
-    if (toSave.length === 0) { alert('No cargaste ningún conteo todavía.'); return }
-    if (!confirm(`¿Guardar el ajuste de ${toSave.length} material(es)?`)) return
-    for (const m of toSave) {
-      await saveInventoryAdjustment(m)
-    }
-  }
-
-  // Exporta el ÚLTIMO CONTEO FÍSICO guardado de cada material (no el teórico), sin importar el filtro
-  // de ubicación que tengas puesto en pantalla — siempre trae TODOS los materiales.
-  // Exporta el stock teórico actual (lo que ya está cargado por ingresos/consumo/ajustes) de TODOS
-  // los materiales, sin importar el filtro de ubicación. Asegurate de guardar cualquier corrección
-  // en Inventario antes de exportar, para que este número coincida con lo físico real.
-  function exportInventarioToExcel() {
-    const header = ['C\u00F3digo', 'Material', 'Ubicaci\u00F3n', 'Proveedor', 'Stock actual (u.)']
-    const rows = materiales.map((m) => {
-      const pres = Number(m.presentacion || 1)
-      const stock = stockByMaterial[m.id] || 0
-      const stockEnPresentacion = pres > 1 ? stock / pres : stock
-      return [m.codigo || '', m.nombre, m.ubicacion || '', m.proveedor_nombre || '', Math.round(stockEnPresentacion * 100) / 100]
-    })
-    const ws = XLSX.utils.aoa_to_sheet([header, ...rows])
-    ws['!cols'] = [{ wch: 10 }, { wch: 40 }, { wch: 20 }, { wch: 25 }, { wch: 16 }]
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, 'Inventario')
-    XLSX.writeFile(wb, `inventario_materia_prima_${new Date().toISOString().split('T')[0]}.xlsx`)
-  }
-
-  function exportStockToExcel() {
-    const header = ['C\u00F3digo', 'Material', 'Proveedor', 'Unidad base', 'Presentaci\u00F3n', 'Stock actual (u. presentaci\u00F3n)', 'Stock actual (unidad base)', 'Stock m\u00EDnimo (u. presentaci\u00F3n)', 'Estado']
-    const rows = materiales.map((m) => {
-      const stock = stockByMaterial[m.id] || 0
-      const pres = Number(m.presentacion || 1)
-      const bajo = stock < m.stock_minimo
-      return [
-        m.codigo || '', m.nombre, m.proveedor_nombre || '', m.unidad_medida, pres,
-        pres > 1 ? Math.round((stock / pres) * 100) / 100 : Math.round(stock * 100) / 100,
-        Math.round(stock * 100) / 100,
-        pres > 1 ? Math.round((m.stock_minimo / pres) * 100) / 100 : m.stock_minimo,
-        bajo ? 'STOCK BAJO' : 'OK',
-      ]
-    })
-    const ws = XLSX.utils.aoa_to_sheet([header, ...rows])
-    ws['!cols'] = [{ wch: 10 }, { wch: 40 }, { wch: 25 }, { wch: 12 }, { wch: 12 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 12 }]
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, 'Stock')
-    XLSX.writeFile(wb, `stock_materia_prima_${new Date().toISOString().split('T')[0]}.xlsx`)
-  }
-
-  // Exporta la "foto" del cálculo de compras en el momento: qué necesitabas, cuánto stock tenías
-  // y cuánto había que pedir — así te queda registrado aunque después siga la producción y los
-  // números de Stock actual se sigan moviendo.
-  function exportCalculadoraToExcel() {
-    if (materialTotalsSorted.length === 0) {
-      alert('Cargá productos y cantidades en la calculadora antes de exportar.')
-      return
-    }
-    const header = ['Proveedor', 'C\u00F3digo', 'Material', 'Necesario (u.)', 'Stock actual (u.)', 'A comprar (u.)']
-    const rows = sortMaterials(materialTotalsSorted).map((m) => {
-      const { aComprar, disponible, necesario } = aComprarInfo(m)
-      return [m.proveedor, m.codigo || '', m.nombre, necesario, disponible, aComprar]
-    })
-    const ws = XLSX.utils.aoa_to_sheet([header, ...rows])
-    ws['!cols'] = [{ wch: 25 }, { wch: 10 }, { wch: 40 }, { wch: 16 }, { wch: 14 }, { wch: 14 }]
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, 'Compras')
-    XLSX.writeFile(wb, `calculadora_compras_${new Date().toISOString().split('T')[0]}.xlsx`)
-  }
-
-  async function removeProductMaterial(id: string) {
-    if (!confirm('¿Quitar este material de la composición del producto?')) return
-    await supabase.from('producto_materiales').delete().eq('id', id)
-    if (selectedProduct) fetchProductMaterials(selectedProduct.id)
-    fetchAll()
-  }
-
-  const filteredCompProducts = compSearch.length > 0
-    ? products.filter((p) => p.name.toLowerCase().includes(compSearch.toLowerCase()) || p.code.includes(compSearch))
-    : products
-
-  // --- Calculadora ---
-  const filteredCalcProducts = calcSearch.length > 0
-    ? products.filter((p) => p.name.toLowerCase().includes(calcSearch.toLowerCase()) || p.code.includes(calcSearch))
-    : products
-
-  async function addCalcRow(p: any) {
-    if (calcRows.some((r) => r.productId === p.id)) { setCalcSearch(''); setCalcShowList(false); return }
-    setCalcRows((prev) => [...prev, { productId: p.id, productName: p.name, qty: '' }])
-    setCalcSearch(''); setCalcShowList(false)
-    await supabase.from('compras_calculadora_draft').upsert({ product_id: p.id, qty: null }, { onConflict: 'product_id' })
-  }
-
-  function updateCalcQty(productId: string, qty: string) {
-    setCalcRows((prev) => prev.map((r) => (r.productId === productId ? { ...r, qty } : r)))
-  }
-
-  async function saveCalcQty(productId: string, qty: string) {
-    const val = qty === '' ? null : parseFloat(qty)
-    await supabase.from('compras_calculadora_draft').upsert({ product_id: productId, qty: val }, { onConflict: 'product_id' })
-  }
-
-  async function removeCalcRow(productId: string) {
-    setCalcRows((prev) => prev.filter((r) => r.productId !== productId))
-    await supabase.from('compras_calculadora_draft').delete().eq('product_id', productId)
-  }
-
-  async function clearCalc() {
-    if (calcRows.length > 0 && !confirm('¿Vaciar la calculadora?')) return
-    setCalcRows([])
-    await supabase.from('compras_calculadora_draft').delete().not('id', 'is', null)
-  }
-
-  // Total de materiales necesarios según las cantidades cargadas
-  const materialTotals: Record<string, { materialId: string; nombre: string; codigo: string; proveedor: string; unidad: string; presentacion: number; total: number }> = {}
-  calcRows.forEach((row) => {
-    const qty = parseFloat(row.qty || '0')
-    if (!qty) return
-    const rows = allProductMaterials.filter((pm) => pm.product_id === row.productId)
-    rows.forEach((pm) => {
-      const key = pm.material_id
-      if (!materialTotals[key]) {
-        materialTotals[key] = {
-          materialId: key,
-          nombre: pm.materiales?.nombre || 'Material',
-          codigo: pm.materiales?.codigo || '',
-          proveedor: pm.materiales?.proveedor_nombre || 'Sin proveedor',
-          unidad: pm.materiales?.unidad_medida || 'u.',
-          presentacion: Number(pm.materiales?.presentacion || 1),
-          total: 0,
+  async function guardarModal() {
+    if (!modal) return
+    setSaving(true)
+    try {
+      if (modal.modo === 'problema') {
+        if (!fTitulo.trim() || !fDesc.trim()) { alert('Completá el problema y la acción.'); return }
+        const { data: p, error } = await supabase.from('mejora_problemas').insert({ titulo: fTitulo.trim() }).select('id').single()
+        if (error || !p) { alert('No se pudo guardar: ' + (error?.message || '')); return }
+        const r = await supabase.from('mejora_acciones').insert({
+          problema_id: p.id, descripcion: fDesc.trim(), fecha: fFecha || null, responsable: fResp.trim().toUpperCase() || null, estado: 'cola',
+        })
+        if (r.error) { alert('No se pudo guardar: ' + r.error.message); return }
+      } else if (modal.modo === 'accion') {
+        if (!fDesc.trim()) { alert('Escribí la acción.'); return }
+        const r = await supabase.from('mejora_acciones').insert({
+          problema_id: modal.problema.id, descripcion: fDesc.trim(), fecha: fFecha || null, responsable: fResp.trim().toUpperCase() || null, estado: 'cola',
+        })
+        if (r.error) { alert('No se pudo guardar: ' + r.error.message); return }
+      } else if (modal.modo === 'editar') {
+        if (!fTitulo.trim() || !fDesc.trim()) { alert('El problema y la acción no pueden quedar vacíos.'); return }
+        const r1 = await supabase.from('mejora_problemas').update({ titulo: fTitulo.trim() }).eq('id', modal.accion.problema_id)
+        if (r1.error) { alert('No se pudo guardar: ' + r1.error.message); return }
+        const r2 = await supabase.from('mejora_acciones').update({
+          descripcion: fDesc.trim(), fecha: fFecha || null, responsable: fResp.trim().toUpperCase() || null,
+        }).eq('id', modal.accion.id)
+        if (r2.error) { alert('No se pudo guardar: ' + r2.error.message); return }
+      } else if (modal.modo === 'pegar') {
+        // Cada renglón: "Problema | Acción" (o separados por tab, como al copiar de Excel). Sin separador: el renglón es el problema.
+        const lineas = fTexto.split('\n').map((l) => l.trim()).filter(Boolean)
+        if (lineas.length === 0) { alert('Pegá al menos un renglón.'); return }
+        for (const l of lineas) {
+          const partes = l.split(/\t|\|/).map((x) => x.trim())
+          const titulo = partes[0]
+          const desc = partes[1] || 'Definir acción'
+          if (!titulo) continue
+          const { data: p, error } = await supabase.from('mejora_problemas').insert({ titulo }).select('id').single()
+          if (error || !p) { alert('No se pudo guardar: ' + (error?.message || '')); break }
+          const r = await supabase.from('mejora_acciones').insert({ problema_id: p.id, descripcion: desc, estado: 'cola' })
+          if (r.error) { alert('No se pudo guardar: ' + r.error.message); break }
         }
       }
-      materialTotals[key].total += qty * pm.cantidad_por_unidad
-    })
-  })
-  const materialTotalsList = Object.values(materialTotals)
-
-  // --- Inventario ---
-  const ubicacionesDisponibles = Array.from(new Set(materiales.map((m) => m.ubicacion).filter(Boolean))).sort()
-  const materialesFiltradosInventario = invUbicacionFilter
-    ? materiales.filter((m) => m.ubicacion === invUbicacionFilter)
-    : materiales
-
-  function sortMaterials(list: typeof materialTotalsList) {
-    return [...list].sort((a, b) => {
-      if (calcSortBy === 'codigo') return a.codigo.localeCompare(b.codigo)
-      if (calcSortBy === 'proveedor') return a.proveedor.localeCompare(b.proveedor)
-      return a.nombre.localeCompare(b.nombre)
-    })
+      setModal(null)
+      await cargar()
+    } finally {
+      setSaving(false)
+    }
   }
 
-  const materialTotalsSorted = sortMaterials(materialTotalsList)
-
-  // A comprar = lo que necesito, en unidades de presentación (chapas si la hay, o la unidad base
-  // si no), menos el Stock actual. Funciona igual tenga presentación >1 o =1 (bulones, tuercas, etc.)
-  function aComprarInfo(m: typeof materialTotalsList[number]) {
-    const pres = m.presentacion > 0 ? m.presentacion : 1
-    const necesarioEnPresentacion = m.total / pres
-    const stockActual = stockByMaterial[m.materialId] || 0
-    const disponible = Math.round((stockActual / pres) * 100) / 100
-    const aComprar = Math.max(0, Math.ceil(necesarioEnPresentacion - disponible))
-    // Todo en la misma unidad: si el material tiene presentación (chapa, barra) se muestra en "u.";
-    // si no, en su unidad base (kg, u., etc.)
-    const unidadLabel = m.presentacion > 1 ? 'u.' : m.unidad
-    const necesario = Math.round(necesarioEnPresentacion * 100) / 100
-    return { aComprar, disponible, necesario, unidadLabel }
+  async function borrarAccion(a: any) {
+    const hermanas = items.filter((x) => x.problema_id === a.problema_id).length
+    const msg = hermanas <= 1
+      ? `¿Borrar la acción ${numLabel(a)} y su problema? No se puede deshacer.`
+      : `¿Borrar la acción ${numLabel(a)}? No se puede deshacer.`
+    if (!confirm(msg)) return
+    setSaving(true)
+    try {
+      const r = hermanas <= 1
+        ? await supabase.from('mejora_problemas').delete().eq('id', a.problema_id)
+        : await supabase.from('mejora_acciones').delete().eq('id', a.id)
+      if (r.error) alert('No se pudo borrar: ' + r.error.message)
+      setModal(null)
+      await cargar()
+    } finally {
+      setSaving(false)
+    }
   }
 
-  const materialsByProveedor: Record<string, typeof materialTotalsList> = {}
-  materialTotalsList.forEach((m) => {
-    if (!materialsByProveedor[m.proveedor]) materialsByProveedor[m.proveedor] = []
-    materialsByProveedor[m.proveedor].push(m)
-  })
-  const proveedoresSorted = Object.keys(materialsByProveedor).sort((a, b) => a.localeCompare(b))
+  // ---------- piezas de pantalla ----------
+  function Avance({ a }: { a: any }) {
+    return (
+      <div className="flex items-center gap-1.5">
+        {[25, 50, 75, 100].map((v) => (
+          <button
+            key={v}
+            disabled={!canEdit}
+            onClick={() => marcarAvance(a, v)}
+            aria-label={`Marcar avance ${v}%`}
+            className={`w-7 h-7 rounded-md border-2 ${a.avance >= v ? 'bg-orange-500 border-orange-700' : 'bg-white border-slate-400'} ${canEdit ? 'cursor-pointer hover:border-orange-600' : 'cursor-default'}`}
+          />
+        ))}
+        <span className="text-xs text-slate-500 w-9">{a.avance}%</span>
+      </div>
+    )
+  }
+
+  function FechaCelda({ a }: { a: any }) {
+    const v = vencida(a)
+    if (!canEdit) {
+      return (
+        <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${!a.fecha ? 'bg-amber-100 text-amber-800' : v ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-700'}`}>
+          {a.fecha ? shortDate(a.fecha) + (v ? ' · vencida' : '') : 'Sin fecha'}
+        </span>
+      )
+    }
+    return (
+      <div className="flex flex-col items-start gap-0.5">
+        <input
+          type="date"
+          key={a.id + (a.fecha || '')}
+          defaultValue={a.fecha || ''}
+          onBlur={(e) => guardarCampo(a, 'fecha', e.target.value)}
+          className={`border rounded-md px-1.5 py-1 text-xs w-32 ${!a.fecha ? 'border-amber-300 bg-amber-50' : v ? 'border-rose-300 bg-rose-50 text-rose-700' : 'border-slate-300'}`}
+        />
+        {v && <span className="text-[11px] font-semibold text-rose-600">Vencida</span>}
+      </div>
+    )
+  }
+
+  function RespCelda({ a }: { a: any }) {
+    if (!canEdit) return <span className="text-sm text-slate-700">{a.responsable || '—'}</span>
+    return (
+      <input
+        key={a.id + (a.responsable || '')}
+        defaultValue={a.responsable || ''}
+        onBlur={(e) => guardarCampo(a, 'responsable', e.target.value)}
+        list="resp-list"
+        placeholder="+ Asignar"
+        className="border border-slate-300 rounded-md px-1.5 py-1 text-xs w-20 uppercase placeholder:normal-case"
+      />
+    )
+  }
+
+  // ---------- calendario ----------
+  function Calendario() {
+    const { y, m } = mesCal
+    const offset = (new Date(y, m, 1).getDay() + 6) % 7
+    const dim = new Date(y, m + 1, 0).getDate()
+    const celdas: { dia: number | null; iso: string; acc: any[] }[] = []
+    for (let i = 0; i < offset; i++) celdas.push({ dia: null, iso: '', acc: [] })
+    let total = 0
+    for (let d = 1; d <= dim; d++) {
+      const s = iso(new Date(y, m, d))
+      const acc = items.filter((a) => a.estado !== 'terminada' && a.fecha === s && coincide(a))
+      total += acc.length
+      celdas.push({ dia: d, iso: s, acc })
+    }
+    const sinFechaTotal = items.filter((a) => a.estado !== 'terminada' && !a.fecha).length
+    function mover(delta: number) {
+      const d = new Date(y, m + delta, 1)
+      setMesCal({ y: d.getFullYear(), m: d.getMonth() })
+    }
+    return (
+      <section className="bg-white border border-slate-200 rounded-xl overflow-hidden mb-6">
+        <div className="px-4 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <button onClick={() => mover(-1)} aria-label="Mes anterior" className="border border-slate-300 rounded-md w-10 h-10 hover:bg-slate-50">◀</button>
+            <h2 className="font-semibold text-slate-800 min-w-[150px] text-center">{MESES[m]} {y}</h2>
+            <button onClick={() => mover(1)} aria-label="Mes siguiente" className="border border-slate-300 rounded-md w-10 h-10 hover:bg-slate-50">▶</button>
+          </div>
+          <span className="text-xs text-slate-500">
+            {total} {total === 1 ? 'acción para cerrar' : 'acciones para cerrar'} este mes · <span className="text-rose-600 font-semibold">rojo = vencida</span>
+          </span>
+        </div>
+        <div className="overflow-x-auto">
+          <div className="grid grid-cols-7 min-w-[840px]">
+            {DIAS.map((d) => (
+              <div key={d} className="px-2 py-1.5 text-xs font-semibold text-slate-500 bg-slate-50 border-b border-slate-200">{d}</div>
+            ))}
+            {celdas.map((c, i) => (
+              <div key={i} className={`min-h-[96px] border-b border-r border-slate-200 p-1.5 min-w-0 ${c.dia === null ? 'bg-slate-50' : c.iso === hoy ? 'bg-blue-50' : 'bg-white'}`}>
+                {c.dia !== null && (
+                  <>
+                    <div className={`text-xs ${c.iso === hoy ? 'font-bold text-blue-700' : 'text-slate-500'}`}>{c.dia}</div>
+                    {c.acc.map((a) => (
+                      <div
+                        key={a.id}
+                        title={`${a.p.titulo} — ${a.descripcion}${a.responsable ? ' (' + a.responsable + ')' : ''}`}
+                        className={`mt-1 text-[11px] leading-tight px-1.5 py-1 rounded ${vencida(a) ? 'bg-rose-100 text-rose-700' : 'bg-orange-100 text-orange-800'}`}
+                      >
+                        <strong>{numLabel(a)}</strong> · {a.descripcion}
+                        {a.responsable && <span className="opacity-70"> · {a.responsable}</span>}
+                      </div>
+                    ))}
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+        <p className="px-4 py-3 text-xs text-slate-500 border-t border-slate-200">
+          Las acciones sin fecha no aparecen en el calendario: {sinFechaTotal} por programar.
+        </p>
+      </section>
+    )
+  }
 
   if (loading) return <main className="p-6 text-slate-500">Cargando...</main>
 
+  if (setupError) {
+    return (
+      <main className="p-6 max-w-3xl mx-auto">
+        <h1 className="text-2xl font-semibold text-slate-800 mb-3">Mejora continua</h1>
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800">
+          Falta crear las tablas de este módulo en la base de datos. Corré el SQL <strong>mejora_continua_tablas.sql</strong> en el SQL Editor de Supabase y recargá la página.
+          <p className="text-xs text-amber-600 mt-2">Detalle técnico: {setupError}</p>
+        </div>
+      </main>
+    )
+  }
+
+  const tarjetas: { key: Filtro; label: string; valor: number; extra?: string; alerta?: boolean }[] = [
+    { key: 'todas', label: 'En el tablero', valor: enTablero.length, extra: ` de ${tope} lugares` },
+    { key: 'vencidas', label: 'Vencidas', valor: cntVencidas, alerta: cntVencidas > 0 },
+    { key: 'sinfecha', label: 'Sin fecha', valor: cntSinFecha },
+    { key: 'cola', label: 'En cola de espera', valor: enCola.length },
+    { key: 'terminadas', label: 'Terminadas', valor: terminadas.length },
+  ]
+  const titulosTabla: Record<string, string> = { todas: 'Tablero', vencidas: 'Acciones vencidas', sinfecha: 'Acciones sin fecha' }
+
   return (
-    <main className="p-6 max-w-5xl mx-auto">
-      <h1 className="text-2xl font-semibold text-slate-800 mb-1">Materia Prima</h1>
-      <p className="text-sm text-slate-500 mb-6">Composición por producto, y calculadora de necesidad para compras.</p>
-
-      <div className="bg-blue-50 border border-blue-200 rounded-xl shadow-sm mb-6 overflow-hidden">
-        <button onClick={() => setShowAyuda(!showAyuda)} className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold text-blue-800">
-          <span>📋 ¿Cómo usar este módulo?</span>
-          <span className={`text-xs transition-transform ${showAyuda ? 'rotate-180' : ''}`}>▾</span>
-        </button>
-        {showAyuda && (
-          <div className="px-5 pb-5 pt-1 space-y-5 text-sm text-slate-700">
-            <div>
-              <p className="font-semibold text-slate-800 mb-2">Antes que nada</p>
-              <p className="pl-9 text-slate-600">
-                Cada material tiene una <strong>Ubicación</strong> (dónde está guardado físicamente: Chapas, Pañol, Bulonería, Estantería Mecanizado) — eso ya está cargado, no hace falta tocarlo salvo que cambie algo de lugar.
-              </p>
-            </div>
-
-            <div>
-              <p className="font-semibold text-slate-800 mb-2">Fin de mes — Conteo físico</p>
-              <ol className="space-y-2">
-                {[
-                  'Entrá a la pestaña Inventario.',
-                  'Filtrá por una ubicación a la vez (arriba, el desplegable) — así contás todo lo que está junto, sin ir de un lado a otro del depósito.',
-                  'Para cada material, contá las chapas/unidades reales y escribilas en "Contado" (en la misma unidad que ves en pantalla — si dice "u." son unidades enteras, no metros cuadrados).',
-                  'Apretá "Guardar todos los conteos" para esa ubicación.',
-                  'Repetí los pasos 2 a 4 con la siguiente ubicación, hasta terminar todas.',
-                  'Cuando ya contaste TODO, apretá "⬇ Exportar conteo a Excel" — no importa en qué ubicación haya quedado el filtro, siempre trae el conteo completo de todos los materiales.',
-                  'Mandale ese Excel a Agustín (es el que después va a Compras).',
-                ].map((texto, i) => (
-                  <li key={i} className="flex gap-3">
-                    <span className="shrink-0 w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center">{i + 1}</span>
-                    <span className="pt-0.5">{texto}</span>
-                  </li>
-                ))}
-              </ol>
-            </div>
+    <main className="p-6 max-w-6xl mx-auto">
+      <div className="flex flex-wrap items-start justify-between gap-3 mb-5">
+        <div>
+          <h1 className="text-2xl font-semibold text-slate-800 mb-1">Mejora continua</h1>
+          <p className="text-sm text-slate-500">
+            Problemas y acciones en curso, y la cola de espera por prioridad.
+            {esDueno && (
+              <button onClick={cambiarTope} className="ml-2 text-xs text-orange-700 underline">Cambiar tope ({tope})</button>
+            )}
+          </p>
+        </div>
+        {canEdit && (
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => abrirModal({ modo: 'pegar' })} className="border border-slate-300 bg-white text-slate-800 text-sm px-4 py-2 rounded-lg hover:bg-slate-50">
+              Pegar lista a la cola
+            </button>
+            <button onClick={() => abrirModal({ modo: 'problema' })} className="bg-slate-900 text-white text-sm px-4 py-2 rounded-lg hover:bg-slate-800">
+              + Nuevo problema
+            </button>
           </div>
         )}
       </div>
 
       {!canEdit && (
         <div className="mb-4 bg-amber-50 border border-amber-200 text-amber-700 text-xs rounded-md px-3 py-2">
-          Modo solo lectura — no tenés permisos para editar la composición.
+          Modo solo lectura — solo el dueño y el encargado pueden cargar y marcar avances.
         </div>
       )}
 
-      <div className="flex gap-1 border-b border-slate-200 mb-6">
-        {([
-          ['stock', 'Stock'],
-          ['inventario', 'Inventario'],
-          ['calculadora', 'Calculadora de compras'],
-          ['composicion', 'Composición por producto'],
-        ] as [Tab, string][]).map(([key, label]) => (
-          <button
-            key={key}
-            onClick={() => setTab(key)}
-            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
-              tab === key ? 'border-slate-800 text-slate-800' : 'border-transparent text-slate-400 hover:text-slate-600'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
+      {/* Tarjetas = filtros */}
+      <div className="flex flex-wrap gap-3 mb-5">
+        {tarjetas.map((t) => {
+          const activa = filtro === t.key
+          return (
+            <button
+              key={t.key}
+              onClick={() => { setFiltro(activa ? 'todas' : t.key); setVista('lista') }}
+              className={`text-left rounded-xl px-4 py-3 min-w-[160px] border-2 ${activa ? 'border-slate-900' : t.alerta ? 'border-amber-200' : 'border-slate-200'} ${t.alerta ? 'bg-amber-50' : 'bg-white'}`}
+            >
+              <p className={`text-xs ${t.alerta ? 'text-amber-800' : 'text-slate-500'}`}>{t.label}</p>
+              <p className={`text-2xl font-bold ${t.alerta ? 'text-amber-800' : 'text-slate-800'}`}>
+                {t.valor}
+                {t.extra && <span className="text-sm font-medium text-slate-500">{t.extra}</span>}
+              </p>
+            </button>
+          )
+        })}
       </div>
 
-      {/* ===================== STOCK ===================== */}
-      {tab === 'stock' && (
-        <>
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="font-semibold text-slate-700">Materiales</h2>
-            <div className="flex items-center gap-2">
-              {canEdit && (
-                <button onClick={() => setShowNewMaterial(true)} className="text-xs bg-slate-700 text-white px-3 py-1.5 rounded-md hover:bg-slate-800">
-                  + Nuevo material
-                </button>
-              )}
-            </div>
-          </div>
-
-          {materiales.length === 0 ? (
-            <p className="text-slate-400 text-sm mb-8">Todavía no cargaste ningún material.</p>
-          ) : (
-            <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm bg-white mb-8">
-              <table className="w-full text-xs border-collapse">
-                <thead>
-                  <tr className="bg-slate-900 text-white text-left">
-                    {([
-                      ['codigo', 'Código'],
-                      ['nombre', 'Material'],
-                      ['proveedor_nombre', 'Proveedor'],
-                    ] as [string, string][]).map(([key, label]) => (
-                      <th key={key} onClick={() => toggleSort(stockSortBy, stockSortDir, key, setStockSortBy, setStockSortDir)}
-                        className="p-1.5 font-medium cursor-pointer select-none hover:bg-slate-800 whitespace-nowrap">
-                        {label} {stockSortBy === key ? (stockSortDir === 1 ? '▲' : '▼') : ''}
-                      </th>
-                    ))}
-                    <th onClick={() => toggleSort(stockSortBy, stockSortDir, 'stock', setStockSortBy, setStockSortDir)}
-                      className="p-1.5 font-medium text-center cursor-pointer select-none hover:bg-slate-800 whitespace-nowrap">
-                      Stock actual {stockSortBy === 'stock' ? (stockSortDir === 1 ? '▲' : '▼') : ''}
-                    </th>
-                    <th onClick={() => toggleSort(stockSortBy, stockSortDir, 'stock_minimo', setStockSortBy, setStockSortDir)}
-                      className="p-1.5 font-medium text-center cursor-pointer select-none hover:bg-slate-800 whitespace-nowrap">
-                      Stock mínimo {stockSortBy === 'stock_minimo' ? (stockSortDir === 1 ? '▲' : '▼') : ''}
-                    </th>
-                    <th className="p-1.5 font-medium text-center whitespace-nowrap">Unidad</th>
-                    <th className="p-1.5 font-medium text-center whitespace-nowrap">Presentación</th>
-                    <th className="p-1.5 font-medium text-center">Estado</th>
-                    <th className="p-1.5 font-medium"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[...materiales].sort((a, b) => {
-                    let av: any, bv: any
-                    if (stockSortBy === 'stock') { av = stockByMaterial[a.id] || 0; bv = stockByMaterial[b.id] || 0 }
-                    else if (stockSortBy === 'stock_minimo') { av = a.stock_minimo; bv = b.stock_minimo }
-                    else { av = (a[stockSortBy] || '').toString().toLowerCase(); bv = (b[stockSortBy] || '').toString().toLowerCase() }
-                    if (av < bv) return -1 * stockSortDir
-                    if (av > bv) return 1 * stockSortDir
-                    return 0
-                  }).map((m) => {
-                    const stock = stockByMaterial[m.id] || 0
-                    const bajo = stock < m.stock_minimo
-                    return (
-                      <tr key={m.id} className="border-t border-slate-100">
-                        <td className="p-1.5 text-slate-400 whitespace-nowrap">
-                          {canEdit && editingCodigo === m.id ? (
-                            <input
-                              autoFocus defaultValue={m.codigo || ''}
-                              onBlur={(e) => saveMaterialCodigo(m.id, e.target.value)}
-                              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
-                              className="w-20 rounded-md border border-blue-300 py-0.5 px-1 text-xs"
-                            />
-                          ) : (
-                            <button
-                              onClick={() => canEdit && setEditingCodigo(m.id)}
-                              disabled={!canEdit}
-                              className={canEdit ? 'hover:underline decoration-dotted' : ''}
-                            >
-                              {m.codigo || (canEdit ? '+ código' : '—')}
-                            </button>
-                          )}
-                        </td>
-                        <td className="p-1.5 text-slate-700 font-medium">
-                          {canEdit && editingNombre === m.id ? (
-                            <input
-                              autoFocus defaultValue={m.nombre}
-                              onBlur={(e) => saveMaterialNombre(m.id, e.target.value)}
-                              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
-                              className="w-full min-w-[160px] rounded-md border border-blue-300 py-0.5 px-1 text-xs"
-                            />
-                          ) : (
-                            <button
-                              onClick={() => canEdit && setEditingNombre(m.id)}
-                              disabled={!canEdit}
-                              className={`text-left ${canEdit ? 'hover:underline decoration-dotted' : ''}`}
-                            >
-                              {m.nombre}
-                            </button>
-                          )}
-                        </td>
-                        <td className="p-1.5 text-slate-500">
-                          {canEdit && editingProveedor === m.id ? (
-                            <input
-                              autoFocus defaultValue={m.proveedor_nombre || ''}
-                              onBlur={(e) => saveMaterialProveedor(m.id, e.target.value)}
-                              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
-                              className="w-32 rounded-md border border-blue-300 py-0.5 px-1 text-xs"
-                            />
-                          ) : (
-                            <button
-                              onClick={() => canEdit && setEditingProveedor(m.id)}
-                              disabled={!canEdit}
-                              className={canEdit ? 'hover:underline decoration-dotted' : ''}
-                            >
-                              {m.proveedor_nombre || (canEdit ? '+ proveedor' : '—')}
-                            </button>
-                          )}
-                        </td>
-                        <td className="p-1.5 text-center text-slate-600 whitespace-nowrap">{formatStock(stock, m)}</td>
-                        <td className="p-1.5 text-center text-slate-400 whitespace-nowrap">
-                          {canEdit && editingStockMinimo === m.id ? (
-                            <input
-                              type="number" autoFocus defaultValue={Number(m.presentacion || 1) > 1 ? Math.round((m.stock_minimo / Number(m.presentacion || 1)) * 100) / 100 : m.stock_minimo}
-                              onBlur={(e) => saveMaterialStockMinimo(m, e.target.value)}
-                              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
-                              className="w-16 text-center rounded-md border border-blue-300 py-0.5 text-xs"
-                            />
-                          ) : (
-                            <button
-                              onClick={() => canEdit && setEditingStockMinimo(m.id)}
-                              disabled={!canEdit}
-                              title={canEdit ? 'Click para editar (en unidades de presentación)' : undefined}
-                              className={canEdit ? 'hover:underline decoration-dotted' : ''}
-                            >
-                              {formatStock(m.stock_minimo, m)}
-                            </button>
-                          )}
-                        </td>
-                        <td className="p-1.5 text-center whitespace-nowrap">
-                          {canEdit && editingUnidad === m.id ? (
-                            <input
-                              autoFocus defaultValue={m.unidad_medida}
-                              placeholder="kg, m2, mm, u."
-                              onBlur={(e) => saveMaterialUnidad(m.id, e.target.value)}
-                              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
-                              className="w-16 text-center rounded-md border border-blue-300 py-0.5 text-xs"
-                            />
-                          ) : (
-                            <button
-                              onClick={() => canEdit && setEditingUnidad(m.id)}
-                              disabled={!canEdit}
-                              title={canEdit ? 'Click para editar' : undefined}
-                              className={canEdit ? 'hover:underline decoration-dotted' : ''}
-                            >
-                              {m.unidad_medida}
-                            </button>
-                          )}
-                        </td>
-                        <td className="p-1.5 text-center whitespace-nowrap">
-                          {canEdit && editingPresentacion === m.id ? (
-                            <input
-                              type="number" autoFocus defaultValue={m.presentacion || 1}
-                              onBlur={(e) => saveMaterialPresentacion(m, e.target.value)}
-                              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
-                              className="w-16 text-center rounded-md border border-blue-300 py-0.5 text-xs"
-                            />
-                          ) : (
-                            <button
-                              onClick={() => canEdit && setEditingPresentacion(m.id)}
-                              disabled={!canEdit}
-                              title={canEdit ? 'Click para editar' : undefined}
-                              className={canEdit ? 'hover:underline decoration-dotted' : ''}
-                            >
-                              {m.presentacion || 1}
-                            </button>
-                          )}
-                        </td>
-                        <td className="p-1.5 text-center">
-                          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
-                            bajo ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'
-                          }`}>
-                            {bajo ? '⚠ Bajo' : 'OK'}
-                          </span>
-                        </td>
-                        <td className="p-1.5 text-right">
-                          {canEdit && (
-                            <button onClick={() => deleteMaterial(m)} className="text-[10px] text-rose-500 hover:underline">Eliminar</button>
-                          )}
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
+      {/* Buscador y vista */}
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+        <div className="flex flex-wrap items-center gap-2">
+          <label htmlFor="mc-buscar" className="text-sm text-slate-500">Buscar</label>
+          <input
+            id="mc-buscar"
+            value={busqueda}
+            onChange={(e) => setBusqueda(e.target.value)}
+            placeholder="N.º de problema (11), de acción (11.2) o texto"
+            className="border border-slate-300 rounded-lg px-3 py-2 text-sm w-[340px] max-w-full"
+          />
+          {hayFiltro && (
+            <button onClick={() => { setFiltro('todas'); setBusqueda('') }} className="text-xs text-orange-700 underline px-2 py-2">Quitar filtros</button>
           )}
+        </div>
+        <div className="flex border border-slate-300 rounded-lg overflow-hidden bg-white">
+          <button onClick={() => setVista('lista')} className={`px-4 py-2 text-sm ${vista === 'lista' ? 'bg-slate-900 text-white' : 'text-slate-800'}`}>Lista</button>
+          <button onClick={() => { setVista('calendario'); setFiltro('todas') }} className={`px-4 py-2 text-sm ${vista === 'calendario' ? 'bg-slate-900 text-white' : 'text-slate-800'}`}>Calendario</button>
+        </div>
+      </div>
 
-          {canEdit && (
-            <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 md:p-5 mb-6">
-              <h2 className="font-semibold text-slate-700 mb-3">Registrar ingreso (compra)</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
-                <div className="relative min-w-0">
-                  <label className="text-xs text-slate-500">Material</label>
-                  <input
-                    placeholder="Buscar material..."
-                    value={ingSearch}
-                    onChange={(e) => { setIngSearch(e.target.value); setIngMaterial(null); setIngShowList(true) }}
-                    onFocus={() => setIngShowList(true)}
-                    className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1"
-                  />
-                  {ingShowList && !ingMaterial && ingSearch.length > 0 && (
-                    <div className="absolute z-20 top-full mt-1 w-full max-h-52 overflow-y-auto bg-white border border-slate-200 rounded-md shadow-lg">
-                      {materiales.filter((m) => m.nombre.toLowerCase().includes(ingSearch.toLowerCase())).map((m) => (
-                        <div key={m.id} onClick={() => pickIngMaterial(m)} className="px-3 py-1.5 text-sm hover:bg-slate-100 cursor-pointer">
-                          {m.nombre} ({m.unidad_medida})
-                        </div>
-                      ))}
+      <datalist id="resp-list">
+        {responsables.map((r) => <option key={r} value={r} />)}
+      </datalist>
+
+      {vista === 'calendario' && <Calendario />}
+
+      {vista === 'lista' && mostrarTablero && (
+        <section className="bg-white border border-slate-200 rounded-xl overflow-hidden mb-6">
+          <div className="px-4 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="font-semibold text-slate-800">{titulosTabla[filtro] || 'Tablero'}</h2>
+            <span className="text-xs text-slate-500">
+              {canEdit ? 'Tocá un cuadradito para marcar el avance: 25 · 50 · 75 · 100%' : 'Avance: 25 · 50 · 75 · 100%'}
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[960px] text-sm border-collapse">
+              <thead>
+                <tr className="text-left text-xs text-slate-500 bg-slate-50">
+                  <th className="p-3 w-14">N.º</th>
+                  <th className="p-3 w-[27%]">Problema</th>
+                  <th className="p-3">Acción</th>
+                  <th className="p-3 w-36">Fecha</th>
+                  <th className="p-3 w-28">Resp.</th>
+                  <th className="p-3 w-44">Avance</th>
+                  {canEdit && <th className="p-3 w-24"></th>}
+                </tr>
+              </thead>
+              <tbody>
+                {tableroFiltrado.map((a, i) => {
+                  const prev = tableroFiltrado[i - 1]
+                  const mostrarProblema = !prev || prev.problema_id !== a.problema_id
+                  return (
+                    <tr key={a.id} className="border-t border-slate-100 align-top">
+                      <td className="p-3 font-semibold text-slate-500 whitespace-nowrap">{numLabel(a)}</td>
+                      <td className="p-3 font-semibold text-slate-800">{mostrarProblema ? a.p.titulo : ''}</td>
+                      <td className="p-3 text-slate-700">{a.descripcion}</td>
+                      <td className="p-3"><FechaCelda a={a} /></td>
+                      <td className="p-3"><RespCelda a={a} /></td>
+                      <td className="p-3"><Avance a={a} /></td>
+                      {canEdit && (
+                        <td className="p-3 whitespace-nowrap text-xs">
+                          <button onClick={() => abrirModal({ modo: 'editar', accion: a })} className="text-slate-600 underline mr-2">Editar</button>
+                          <button onClick={() => abrirModal({ modo: 'accion', problema: a.p })} className="text-orange-700 underline" title="Agregar otra acción a este problema">+ acción</button>
+                        </td>
+                      )}
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          {tableroFiltrado.length === 0 && <p className="p-4 text-sm text-slate-500">No hay acciones con ese filtro.</p>}
+        </section>
+      )}
+
+      {vista === 'lista' && mostrarCola && (
+        <section className="bg-white border border-slate-200 rounded-xl overflow-hidden mb-6">
+          <div className="px-4 py-3 border-b border-slate-200">
+            <h2 className="font-semibold text-slate-800">Cola de espera</h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Ordenada por prioridad. Cuando una acción llega al 100% y se libera un lugar, sube sola la primera.
+            </p>
+          </div>
+          {colaFiltrada.length === 0 ? (
+            <p className="p-4 text-sm text-slate-500">{enCola.length === 0 ? 'No hay nada esperando.' : 'No hay acciones con esa búsqueda.'}</p>
+          ) : (
+            colaFiltrada.map((a) => {
+              const posicion = enCola.findIndex((x) => x.id === a.id) + 1
+              return (
+                <div key={a.id} className="flex flex-wrap items-center gap-3 px-4 py-3 border-t border-slate-100">
+                  <span className="w-7 h-7 rounded-full bg-slate-900 text-white text-xs font-bold flex items-center justify-center shrink-0">{posicion}</span>
+                  <div className="flex-1 min-w-[260px]">
+                    <p className="font-semibold text-slate-800 text-sm">
+                      <span className="text-slate-400 font-medium mr-1.5">{numLabel(a)}</span>{a.p.titulo}
+                    </p>
+                    <p className="text-sm text-slate-600">{a.descripcion}</p>
+                    {(a.fecha || a.responsable) && (
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        {a.responsable ? `Resp.: ${a.responsable}` : ''}{a.responsable && a.fecha ? ' · ' : ''}{a.fecha ? `Fecha: ${fullDate(a.fecha)}` : ''}
+                      </p>
+                    )}
+                  </div>
+                  {canEdit && (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button onClick={() => mover(a, -1)} aria-label="Subir prioridad" className="border border-slate-300 rounded-md w-9 h-9 hover:bg-slate-50">▲</button>
+                      <button onClick={() => mover(a, 1)} aria-label="Bajar prioridad" className="border border-slate-300 rounded-md w-9 h-9 hover:bg-slate-50">▼</button>
+                      <button
+                        onClick={() => subirAlTablero(a)}
+                        disabled={lugaresLibres <= 0}
+                        title={lugaresLibres <= 0 ? 'El tablero está completo' : 'Subir al tablero'}
+                        className="text-xs border border-slate-300 rounded-md px-3 h-9 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        Subir al tablero
+                      </button>
+                      <button onClick={() => abrirModal({ modo: 'editar', accion: a })} className="text-xs text-slate-600 underline px-1">Editar</button>
                     </div>
                   )}
                 </div>
-                <div>
-                  <label className="text-xs text-slate-500">
-                    Cantidad {ingMaterial ? (Number(ingMaterial.presentacion || 1) > 1
-                      ? `(en unidades de presentación — 1 = ${ingMaterial.presentacion} ${ingMaterial.unidad_medida})`
-                      : `(${ingMaterial.unidad_medida})`) : ''}
-                  </label>
-                  <input type="number" value={ingCantidad} onChange={(e) => setIngCantidad(e.target.value)}
-                    className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1" />
-                </div>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
-                <div>
-                  <label className="text-xs text-slate-500">Fecha</label>
-                  <input type="date" value={ingFecha} onChange={(e) => setIngFecha(e.target.value)}
-                    className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1" />
-                </div>
-                <div>
-                  <label className="text-xs text-slate-500">Notas (opcional)</label>
-                  <input placeholder="Ej: compra proveedor X" value={ingNotes} onChange={(e) => setIngNotes(e.target.value)}
-                    className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full mt-1" />
-                </div>
-              </div>
-              <button onClick={registrarIngresoMaterial} className="bg-emerald-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-emerald-700">
-                Registrar ingreso
-              </button>
-            </div>
+              )
+            })
           )}
+        </section>
+      )}
 
-          <h2 className="font-semibold text-slate-700 mb-3">Últimos movimientos</h2>
-          {movimientos.length === 0 ? (
-            <p className="text-slate-400 text-sm">Todavía no hay movimientos registrados.</p>
+      {vista === 'lista' && mostrarTerminadas && (
+        <section className="bg-white border border-slate-200 rounded-xl overflow-hidden mb-6">
+          <div className="px-4 py-3 border-b border-slate-200">
+            <h2 className="font-semibold text-slate-800">Terminadas</h2>
+            <p className="text-xs text-slate-500 mt-0.5">Quedan guardadas con su fecha de cierre.</p>
+          </div>
+          {terminadasFiltradas.length === 0 ? (
+            <p className="p-4 text-sm text-slate-500">{terminadas.length === 0 ? 'Todavía no se terminó ninguna.' : 'No hay acciones con esa búsqueda.'}</p>
           ) : (
-            <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm bg-white">
-              <table className="w-full text-sm border-collapse">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[760px] text-sm border-collapse">
                 <thead>
-                  <tr className="bg-slate-900 text-white text-left">
-                    <th className="p-3 font-medium">Fecha</th>
-                    <th className="p-3 font-medium">Material</th>
-                    <th className="p-3 font-medium text-center">Tipo</th>
-                    <th className="p-3 font-medium text-center">Cantidad</th>
-                    <th className="p-3 font-medium">Origen</th>
-                    <th className="p-3 font-medium"></th>
+                  <tr className="text-left text-xs text-slate-500 bg-slate-50">
+                    <th className="p-3 w-14">N.º</th>
+                    <th className="p-3 w-[30%]">Problema</th>
+                    <th className="p-3">Acción</th>
+                    <th className="p-3 w-24">Resp.</th>
+                    <th className="p-3 w-28">Fecha prevista</th>
+                    <th className="p-3 w-28">Cerrada el</th>
+                    {canEdit && <th className="p-3 w-20"></th>}
                   </tr>
                 </thead>
                 <tbody>
-                  {movimientos.map((m: any) => (
-                    <tr key={m.id} className="border-t border-slate-100">
-                      <td className="p-3 text-slate-500">{m.fecha.split('-').reverse().join('/')}</td>
-                      <td className="p-3 text-slate-700">{m.materiales?.nombre}</td>
-                      <td className="p-3 text-center">
-                        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-                          m.tipo === 'ingreso' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
-                        }`}>
-                          {m.tipo === 'ingreso' ? 'Ingreso' : 'Egreso'}
-                        </span>
-                      </td>
-                      <td className="p-3 text-center font-medium text-slate-700">
-                        {m.tipo === 'ingreso' ? '+' : '-'}{Math.round(m.cantidad * 100) / 100} {m.materiales?.unidad_medida}
-                      </td>
-                      <td className="p-3 text-slate-500 text-xs">
-                        {m.origen === 'consumo_automatico' ? '🤖 Automático (producción)' : m.origen === 'ajuste_inventario' ? '📋 Ajuste inventario' : '✍️ Manual'}
-                        {m.notes && <span className="italic"> — "{m.notes}"</span>}
-                      </td>
-                      <td className="p-3 text-right">
-                        {canEdit && m.origen === 'manual' && (
-                          <button onClick={() => deleteMovimiento(m.id)} className="text-xs text-rose-500 hover:underline">Eliminar</button>
-                        )}
-                      </td>
+                  {terminadasFiltradas.map((a) => (
+                    <tr key={a.id} className="border-t border-slate-100 align-top">
+                      <td className="p-3 font-semibold text-slate-500">{numLabel(a)}</td>
+                      <td className="p-3 text-slate-800 font-medium">{a.p.titulo}</td>
+                      <td className="p-3 text-slate-700">{a.descripcion}</td>
+                      <td className="p-3 text-slate-600">{a.responsable || '—'}</td>
+                      <td className="p-3 text-slate-500">{fullDate(a.fecha)}</td>
+                      <td className="p-3 text-emerald-700 font-semibold">{fullDate(a.terminada_at)}</td>
+                      {canEdit && (
+                        <td className="p-3 text-xs">
+                          <button onClick={() => reabrir(a)} className="text-slate-600 underline">Reabrir</button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           )}
-        </>
+        </section>
       )}
 
-      {/* ===================== INVENTARIO ===================== */}
-      {tab === 'inventario' && (
-        <>
-          <p className="text-xs text-slate-400 mb-4">
-            Contá materiales de a una ubicación por vez: filtrá por dónde están parados físicamente, tipeá lo que contaste
-            (en unidades de presentación, ej. chapas) y guardá — la diferencia contra el stock teórico queda registrada como ajuste.
-          </p>
+      {/* Ventana de carga / edición */}
+      {modal && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-start justify-center p-4 overflow-y-auto" onClick={() => !saving && setModal(null)}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg p-5 mt-10" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-slate-800 mb-3">
+              {modal.modo === 'problema' && 'Nuevo problema'}
+              {modal.modo === 'accion' && `Nueva acción para el problema ${modal.problema.numero}`}
+              {modal.modo === 'editar' && `Editar ${numLabel(modal.accion)}`}
+              {modal.modo === 'pegar' && 'Pegar lista a la cola'}
+            </h3>
 
-          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-            <select value={invUbicacionFilter} onChange={(e) => setInvUbicacionFilter(e.target.value)}
-              className="border border-slate-300 rounded-md px-2 py-1.5 text-sm">
-              <option value="">Todas las ubicaciones</option>
-              {ubicacionesDisponibles.map((u) => <option key={u} value={u}>{u}</option>)}
-              <option value="__sin__">(Sin ubicación asignada)</option>
-            </select>
-            <div className="flex items-center gap-2">
-              <button onClick={exportInventarioToExcel} className="text-xs border border-slate-300 text-slate-600 px-3 py-1.5 rounded-md hover:bg-slate-50" title="Exporta el último conteo guardado de TODOS los materiales, sin importar el filtro de arriba">
-                ⬇ Exportar conteo a Excel
-              </button>
-              {canEdit && (
-                <button onClick={saveAllInventoryAdjustments} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md hover:bg-emerald-700">
-                  Guardar todos los conteos
-                </button>
-              )}
-            </div>
-          </div>
+            {modal.modo === 'accion' && (
+              <p className="text-sm text-slate-600 mb-3 bg-slate-50 rounded-md px-3 py-2">{modal.problema.titulo}</p>
+            )}
 
-          {materialesFiltradosInventario.length === 0 ? (
-            <p className="text-slate-400 text-sm">No hay materiales para esta ubicación.</p>
-          ) : (
-            <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm bg-white">
-              <table className="w-full text-xs border-collapse">
-                <thead>
-                  <tr className="bg-slate-900 text-white text-left">
-                    <th className="p-1.5 font-medium">Código</th>
-                    <th className="p-1.5 font-medium">Material</th>
-                    <th className="p-1.5 font-medium">Ubicación</th>
-                    <th className="p-1.5 font-medium text-center">Stock teórico</th>
-                    <th className="p-1.5 font-medium text-center">Contado</th>
-                    <th className="p-1.5 font-medium text-center">Diferencia</th>
-                    <th className="p-1.5 font-medium"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(invUbicacionFilter === '__sin__'
-                    ? materiales.filter((m) => !m.ubicacion)
-                    : materialesFiltradosInventario
-                  ).map((m) => {
-                    const pres = Number(m.presentacion || 1)
-                    const stockTeorico = stockByMaterial[m.id] || 0
-                    const stockTeoricoPres = pres > 1 ? stockTeorico / pres : stockTeorico
-                    const contadoInput = invCounts[m.id] ?? ''
-                    const contadoNum = contadoInput !== '' ? parseFloat(contadoInput) : null
-                    const diferencia = contadoNum != null ? Math.round((contadoNum - stockTeoricoPres) * 100) / 100 : null
-                    const yaGuardado = invSavedDiffs[m.id] !== undefined
-                    return (
-                      <tr key={m.id} className="border-t border-slate-100">
-                        <td className="p-1.5 text-slate-400">{m.codigo || '—'}</td>
-                        <td className="p-1.5 text-slate-700 font-medium">{m.nombre}</td>
-                        <td className="p-1.5">
-                          {canEdit && editingUbicacion === m.id ? (
-                            <input
-                              autoFocus defaultValue={m.ubicacion || ''}
-                              placeholder="Ej: Estantería chapa"
-                              onBlur={(e) => saveMaterialUbicacion(m.id, e.target.value)}
-                              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
-                              className="w-32 rounded-md border border-blue-300 py-0.5 px-1 text-xs"
-                            />
-                          ) : (
-                            <button
-                              onClick={() => canEdit && setEditingUbicacion(m.id)}
-                              disabled={!canEdit}
-                              className={`text-slate-500 ${canEdit ? 'hover:underline decoration-dotted' : ''}`}
-                            >
-                              {m.ubicacion || (canEdit ? '+ asignar' : '—')}
-                            </button>
-                          )}
-                        </td>
-                        <td className="p-1.5 text-center text-slate-500">{Math.round(stockTeoricoPres * 100) / 100} u.</td>
-                        <td className="p-1.5 text-center">
-                          <input
-                            type="number" value={contadoInput}
-                            onChange={(e) => updateInvCount(m.id, e.target.value)}
-                            disabled={!canEdit}
-                            placeholder="—"
-                            className="w-16 text-center rounded-md border border-slate-300 py-0.5 disabled:bg-slate-50"
-                          />
-                        </td>
-                        <td className={`p-1.5 text-center font-semibold ${
-                          diferencia == null ? 'text-slate-300' : diferencia === 0 ? 'text-emerald-600' : diferencia > 0 ? 'text-blue-600' : 'text-rose-600'
-                        }`}>
-                          {diferencia != null ? (diferencia > 0 ? `+${diferencia}` : diferencia) : '—'}
-                        </td>
-                        <td className="p-1.5 text-right">
-                          {canEdit && contadoInput !== '' && (
-                            <button onClick={() => saveInventoryAdjustment(m)} className="text-xs text-blue-600 hover:underline">
-                              {yaGuardado ? 'Reguardar' : 'Guardar'}
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
-      )}
-
-      {/* ===================== CALCULADORA ===================== */}
-      {tab === 'calculadora' && (
-        <>
-          <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 md:p-5 mb-6">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="font-semibold text-slate-700">Productos a producir</h2>
-              {calcRows.length > 0 && (
-                <button onClick={clearCalc} className="text-xs text-rose-500 hover:underline">Vaciar todo</button>
-              )}
-            </div>
-
-            <div className="relative min-w-0 mb-3">
-              <input
-                placeholder="Buscar producto para agregar..."
-                value={calcSearch}
-                onChange={(e) => { setCalcSearch(e.target.value); setCalcShowList(true) }}
-                onFocus={() => setCalcShowList(true)}
-                className="border border-slate-300 rounded-md px-3 py-2 text-sm w-full"
-              />
-              {calcShowList && calcSearch.length > 0 && (
-                <div className="absolute z-20 top-full mt-1 w-full max-h-52 overflow-y-auto bg-white border border-slate-200 rounded-md shadow-lg">
-                  {filteredCalcProducts.length === 0 ? (
-                    <div className="p-2 text-xs text-slate-400">Sin resultados</div>
-                  ) : filteredCalcProducts.map((p) => (
-                    <div key={p.id} onClick={() => addCalcRow(p)} className="px-3 py-1.5 text-sm hover:bg-slate-100 cursor-pointer">
-                      <span className="text-xs text-slate-400 mr-2">{p.code}</span>{p.name}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {calcRows.length === 0 ? (
-              <p className="text-sm text-slate-400">Buscá y agregá los productos que querés calcular, con la cantidad a producir de cada uno.</p>
-            ) : (
-              <div className="space-y-2">
-                {calcRows.map((row) => {
-                  const hasComposicion = allProductMaterials.some((pm) => pm.product_id === row.productId)
-                  return (
-                    <div key={row.productId} className="flex items-center gap-2 bg-slate-50 rounded-md px-3 py-2">
-                      <span className="text-sm text-slate-700 flex-1 min-w-0 truncate">{row.productName}</span>
-                      {!hasComposicion && (
-                        <span className="text-[10px] text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded shrink-0">sin composición cargada</span>
-                      )}
-                      <input
-                        type="number" placeholder="Cantidad"
-                        value={row.qty}
-                        onChange={(e) => updateCalcQty(row.productId, e.target.value)}
-                        onBlur={(e) => saveCalcQty(row.productId, e.target.value)}
-                        className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-28 shrink-0"
-                      />
-                      <button onClick={() => removeCalcRow(row.productId)} className="text-xs text-rose-500 hover:underline shrink-0">Quitar</button>
-                    </div>
-                  )
-                })}
+            {(modal.modo === 'problema' || modal.modo === 'editar') && (
+              <div className="mb-3">
+                <label className="text-xs text-slate-500">Problema</label>
+                <input value={fTitulo} onChange={(e) => setFTitulo(e.target.value)} className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm" />
+                {modal.modo === 'editar' && <p className="text-[11px] text-slate-400 mt-1">Si el problema tiene más acciones, el cambio se ve en todas.</p>}
               </div>
             )}
-          </div>
 
-          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-            <h2 className="font-semibold text-slate-700">Materia prima necesaria</h2>
-            <div className="flex items-center gap-2">
-              <label className="flex items-center gap-1.5 text-xs text-slate-500">
-                <input type="checkbox" checked={calcGroupByProveedor} onChange={(e) => setCalcGroupByProveedor(e.target.checked)} className="w-4 h-4 accent-slate-700" />
-                Agrupar por proveedor
-              </label>
-              <select value={calcSortBy} onChange={(e) => setCalcSortBy(e.target.value as any)} className="border border-slate-300 rounded-md px-2 py-1 text-xs">
-                <option value="proveedor">Ordenar por proveedor</option>
-                <option value="codigo">Ordenar por código</option>
-                <option value="nombre">Ordenar por nombre (A-Z)</option>
-              </select>
-              <button onClick={exportCalculadoraToExcel} className="text-xs border border-slate-300 text-slate-600 px-3 py-1.5 rounded-md hover:bg-slate-50">
-                ⬇ Exportar a Excel
-              </button>
-            </div>
-          </div>
-          {materialTotalsSorted.length === 0 ? (
-            <p className="text-slate-400 text-sm">Cargá productos y cantidades arriba para ver el total.</p>
-          ) : calcGroupByProveedor ? (
-            <div className="space-y-4">
-              {proveedoresSorted.map((prov) => (
-                <div key={prov} className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm bg-white">
-                  <p className="px-3 py-2 text-xs font-semibold text-slate-500 bg-slate-50 border-b border-slate-200">{prov}</p>
-                  <table className="w-full text-sm border-collapse">
-                    <thead>
-                      <tr className="text-left text-slate-400 text-xs">
-                        <th className="p-3 font-medium">Código</th>
-                        <th className="p-3 font-medium">Material</th>
-                        <th className="p-3 font-medium text-right">Necesario</th>
-                        <th className="p-3 font-medium text-right">Stock actual</th>
-                        <th className="p-3 font-medium text-right">A comprar</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {sortMaterials(materialsByProveedor[prov]).map((m) => {
-                        const { aComprar, disponible, necesario, unidadLabel } = aComprarInfo(m)
-                        return (
-                          <tr key={m.nombre + m.codigo} className="border-t border-slate-100">
-                            <td className="p-3 text-slate-400 text-xs">{m.codigo || '—'}</td>
-                            <td className="p-3 text-slate-700 font-medium">{m.nombre}</td>
-                            <td className="p-3 text-right text-slate-500">{necesario} {unidadLabel}</td>
-                            <td className="p-3 text-right text-xs text-slate-500">
-                              {disponible != null ? `${disponible} ${unidadLabel}` : '—'}
-                            </td>
-                            <td className="p-3 text-right font-semibold text-slate-700">
-                              {aComprar != null ? `${aComprar} ${unidadLabel}` : '—'}
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
+            {modal.modo !== 'pegar' && (
+              <>
+                <div className="mb-3">
+                  <label className="text-xs text-slate-500">Acción</label>
+                  <textarea value={fDesc} onChange={(e) => setFDesc(e.target.value)} rows={2} className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm" />
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm bg-white">
-              <table className="w-full text-sm border-collapse">
-                <thead>
-                  <tr className="bg-slate-900 text-white text-left">
-                    <th className="p-3 font-medium">Código</th>
-                    <th className="p-3 font-medium">Material</th>
-                    <th className="p-3 font-medium">Proveedor</th>
-                    <th className="p-3 font-medium text-right">Necesario</th>
-                    <th className="p-3 font-medium text-right">Stock actual</th>
-                    <th className="p-3 font-medium text-right">A comprar</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {materialTotalsSorted.map((m) => {
-                    const { aComprar, disponible, necesario, unidadLabel } = aComprarInfo(m)
-                    return (
-                      <tr key={m.nombre + m.codigo} className="border-t border-slate-100">
-                        <td className="p-3 text-slate-400 text-xs">{m.codigo || '—'}</td>
-                        <td className="p-3 text-slate-700 font-medium">{m.nombre}</td>
-                        <td className="p-3 text-slate-500 text-xs">{m.proveedor}</td>
-                        <td className="p-3 text-right text-slate-500">{necesario} {unidadLabel}</td>
-                        <td className="p-3 text-right text-xs text-slate-500">
-                          {disponible != null ? `${disponible} ${unidadLabel}` : '—'}
-                        </td>
-                        <td className="p-3 text-right font-semibold text-slate-700">
-                          {aComprar != null ? `${aComprar} ${unidadLabel}` : '—'}
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
-      )}
-
-      {/* ===================== COMPOSICIÓN ===================== */}
-      {tab === 'composicion' && (
-        <>
-          {!selectedProduct ? (
-            <>
-              <input
-                placeholder="Buscar producto por nombre o código..."
-                value={compSearch}
-                onChange={(e) => setCompSearch(e.target.value)}
-                className="border border-slate-300 rounded-md px-3 py-2 text-sm w-full sm:w-80 mb-4"
-              />
-              <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm bg-white">
-                <table className="w-full text-sm border-collapse">
-                  <thead>
-                    <tr className="bg-slate-900 text-white text-left">
-                      <th className="p-3 font-medium">Producto</th>
-                      <th className="p-3 font-medium text-center">Materiales cargados</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredCompProducts.map((p) => {
-                      const count = allProductMaterials.filter((pm) => pm.product_id === p.id).length
-                      return (
-                        <tr key={p.id} onClick={() => selectProductForComp(p)} className="border-t border-slate-100 hover:bg-slate-50 cursor-pointer">
-                          <td className="p-3 text-slate-700">
-                            <span className="text-xs text-slate-400 mr-2">{p.code}</span>{p.name}
-                          </td>
-                          <td className="p-3 text-center text-slate-500">{count > 0 ? `${count} material(es)` : '—'}</td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          ) : (
-            <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-5">
-              <button onClick={() => setSelectedProduct(null)} className="text-xs font-medium text-slate-500 hover:text-slate-700 mb-3">
-                ← Volver al listado
-              </button>
-              <h2 className="font-semibold text-slate-700 mb-4">{selectedProduct.name}</h2>
-
-              {productMaterials.length === 0 ? (
-                <p className="text-sm text-slate-400 mb-4">Todavía no tiene materiales cargados.</p>
-              ) : (
-                <div className="space-y-2 mb-4">
-                  {productMaterials.map((pm) => (
-                    <div key={pm.id} className="flex items-center justify-between gap-3 bg-slate-50 rounded-md px-3 py-2 flex-wrap">
-                      <span className="text-sm text-slate-700 flex-1 min-w-[120px]">{pm.materiales?.nombre}</span>
-                      <div className="flex items-center gap-1">
-                        <input
-                          type="number"
-                          defaultValue={pm.cantidad_por_unidad}
-                          onBlur={(e) => saveProductMaterialQty(pm.id, parseFloat(e.target.value || '0'))}
-                          disabled={!canEdit}
-                          className="w-20 text-center rounded-md border border-slate-300 py-1 text-sm disabled:bg-slate-100"
-                        />
-                        <span className="text-xs text-slate-400">{pm.materiales?.unidad_medida} / u.</span>
-                      </div>
-                      <select
-                        defaultValue={pm.sector_id || ''}
-                        onChange={(e) => saveProductMaterialSector(pm.id, e.target.value)}
-                        disabled={!canEdit}
-                        className="border border-slate-300 rounded-md px-2 py-1 text-xs disabled:bg-slate-100"
-                      >
-                        <option value="">Sector de consumo...</option>
-                        {sectors.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                      </select>
-                      {canEdit && (
-                        <button onClick={() => removeProductMaterial(pm.id)} className="text-xs text-rose-500 hover:underline">Quitar</button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {canEdit && (
-                <div className="pt-4 border-t border-slate-200">
-                  <p className="text-xs font-medium text-slate-600 mb-2">Agregar material a este producto</p>
-                  <div className="flex gap-2 flex-wrap">
-                    <select value={addMatId} onChange={(e) => setAddMatId(e.target.value)} className="border border-slate-300 rounded-md px-2 py-1.5 text-sm flex-1 min-w-[160px]">
-                      <option value="">Elegí un material...</option>
-                      {materiales.filter((m) => !productMaterials.some((pm) => pm.material_id === m.id)).map((m) => (
-                        <option key={m.id} value={m.id}>{m.nombre} ({m.unidad_medida})</option>
-                      ))}
-                    </select>
-                    <input placeholder="Cant./u." type="number" value={addMatQty} onChange={(e) => setAddMatQty(e.target.value)}
-                      className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-24" />
-                    <select value={addMatSector} onChange={(e) => setAddMatSector(e.target.value)} className="border border-slate-300 rounded-md px-2 py-1.5 text-sm">
-                      <option value="">Sector (opcional)...</option>
-                      {sectors.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                    </select>
-                    <button onClick={addMaterialToProduct} className="text-xs bg-emerald-600 text-white px-3 rounded-md hover:bg-emerald-700 shrink-0">
-                      Agregar
-                    </button>
+                <div className="grid grid-cols-2 gap-3 mb-3">
+                  <div>
+                    <label className="text-xs text-slate-500">Fecha estimada (opcional)</label>
+                    <input type="date" value={fFecha} onChange={(e) => setFFecha(e.target.value)} className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-500">Responsable (iniciales)</label>
+                    <input value={fResp} onChange={(e) => setFResp(e.target.value)} list="resp-list" className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm uppercase" />
                   </div>
                 </div>
-              )}
-            </div>
-          )}
-        </>
-      )}
+                {modal.modo !== 'editar' && (
+                  <p className="text-xs text-slate-500 mb-3">
+                    {lugaresLibres > 0
+                      ? `Hay ${lugaresLibres} ${lugaresLibres === 1 ? 'lugar libre' : 'lugares libres'} en el tablero: la acción entra directo.`
+                      : 'El tablero está completo: la acción entra al final de la cola de espera.'}
+                  </p>
+                )}
+              </>
+            )}
 
-      {showNewMaterial && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setShowNewMaterial(false)}>
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6" onClick={(e) => e.stopPropagation()}>
-            <h3 className="font-semibold text-slate-800 mb-4">Nuevo material</h3>
-            <div className="space-y-3">
+            {modal.modo === 'pegar' && (
+              <div className="mb-3">
+                <p className="text-sm text-slate-600 mb-2">
+                  Un renglón por problema, con este formato: <strong>Problema | Acción</strong>. También sirve copiar dos columnas de Excel. Si un renglón no tiene «|», se carga como problema con la acción «Definir acción». Entran a la cola en el orden en que los pegues.
+                </p>
+                <textarea
+                  value={fTexto}
+                  onChange={(e) => setFTexto(e.target.value)}
+                  rows={8}
+                  placeholder={'Falta de iluminación en plegado | Cambiar luminarias\nDesorden en pañol | 5S del pañol'}
+                  className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm font-mono"
+                />
+              </div>
+            )}
+
+            <div className="flex items-center justify-between gap-2 mt-4">
               <div>
-                <label className="text-xs text-slate-500">Nombre</label>
-                <input value={newMatName} onChange={(e) => setNewMatName(e.target.value)}
-                  className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full" />
+                {modal.modo === 'editar' && (
+                  <button onClick={() => borrarAccion(modal.accion)} disabled={saving} className="text-sm text-rose-600 underline">Borrar</button>
+                )}
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs text-slate-500">Unidad</label>
-                  <input placeholder="kg, m2, mm, u." value={newMatUnidad} onChange={(e) => setNewMatUnidad(e.target.value)}
-                    className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full" />
-                </div>
-                <div>
-                  <label className="text-xs text-slate-500">Presentación (ej: chapa=4.5 m2)</label>
-                  <input type="number" value={newMatPresentacion} onChange={(e) => setNewMatPresentacion(e.target.value)}
-                    className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full" />
-                </div>
+              <div className="flex gap-2">
+                <button onClick={() => setModal(null)} disabled={saving} className="border border-slate-300 text-sm px-4 py-2 rounded-lg hover:bg-slate-50">Cancelar</button>
+                <button onClick={guardarModal} disabled={saving} className="bg-slate-900 text-white text-sm px-4 py-2 rounded-lg hover:bg-slate-800 disabled:opacity-50">
+                  {saving ? 'Guardando...' : 'Guardar'}
+                </button>
               </div>
-              <div>
-                <label className="text-xs text-slate-500">Stock mínimo (en unidades de presentación, ej: chapas)</label>
-                <input type="number" value={newMatStockMinimo} onChange={(e) => setNewMatStockMinimo(e.target.value)}
-                  className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full" />
-              </div>
-              <div>
-                <label className="text-xs text-slate-500">Ubicación física (opcional, para el inventario)</label>
-                <input placeholder="Ej: Estantería de chapa" value={newMatUbicacion} onChange={(e) => setNewMatUbicacion(e.target.value)}
-                  className="border border-slate-300 rounded-md px-2 py-1.5 text-sm w-full" />
-              </div>
-            </div>
-            <div className="flex gap-2 mt-5">
-              <button onClick={() => setShowNewMaterial(false)} className="flex-1 border border-slate-300 rounded-md py-2 text-sm text-slate-600 hover:bg-slate-50">
-                Cancelar
-              </button>
-              <button onClick={addMaterialGlobal} className="flex-1 bg-blue-600 text-white rounded-md py-2 text-sm font-medium hover:bg-blue-700">
-                Crear
-              </button>
             </div>
           </div>
         </div>
